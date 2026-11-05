@@ -1,0 +1,154 @@
+// Từ yêu cầu đã chốt → dòng dự toán (WBS); đối chiếu bảng tiêu chí gói matbao.ws để biết
+// phần nào nằm trong gói (không tính lại) và phần nào phải tính thêm.
+import { computeQuote } from './pricing.js';
+
+export function itemByCode(catalog, code) { return catalog.items.find((i) => i.code === code); }
+export function featureByCode(catalog, code) { return catalog.features.find((f) => f.code === code); }
+
+/** Tạo dòng tự động: các đầu việc nền + đầu việc theo từng yêu cầu được chọn làm. */
+export function buildAutoLines(catalog, requirements) {
+  const out = [];
+  for (const code of catalog.base_items) {
+    const it = itemByCode(catalog, code);
+    out.push(lineFrom(it, 1, { feature: null, requirement_id: null }));
+  }
+  for (const r of requirements) {
+    if (r.decision !== 'include') continue;
+    const f = featureByCode(catalog, r.feature);
+    if (!f) continue;
+    const q = Number(r.quantity ?? f.default_qty ?? 1);
+    for (const spec of f.items) {
+      const it = itemByCode(catalog, spec.code);
+      if (!it) continue;
+      const qty = Math.max(1, Math.ceil(q / (spec.per || 1)));
+      out.push(lineFrom(it, qty, { feature: f.code, requirement_id: r.id, requirement_code: r.code }));
+    }
+  }
+  return out;
+}
+
+function lineFrom(it, qty, extra) {
+  return { code: it.code, title: it.title, group: it.group, role: it.role, unit: it.unit, qty, o: it.o, m: it.m, p: it.p, source: 'auto', ...extra };
+}
+
+// ---------- Đọc bảng tiêu chí gói ----------
+export function packageList(packagesData) {
+  const out = [];
+  for (const line of packagesData.lines) {
+    if (!['WEB_ZERO', 'WEB_HERO'].includes(line.id)) continue;
+    for (const p of line.packages) out.push({ line, pkg: p });
+  }
+  return out;
+}
+
+export function findPackage(packagesData, code) {
+  for (const line of packagesData.lines) {
+    const p = line.packages.find((x) => x.code === code);
+    if (p) return { line, pkg: p };
+  }
+  return null;
+}
+
+function criterionValue(ctx, title) {
+  const c = ctx.line.criteria.find((c) => c.title.toLowerCase().startsWith(title.toLowerCase()));
+  if (!c) return undefined;
+  return ctx.pkg.features?.[c.no] ?? undefined;
+}
+const maxNumber = (v) => {
+  if (!v) return null;
+  const nums = String(v).match(/\d[\d.]*/g);
+  if (!nums) return null;
+  const n = Math.max(...nums.map((s) => Number(s.replace(/\./g, ''))));
+  return /\+/.test(v) ? Infinity : n;
+};
+const levelOf = (v) => { const m = String(v || '').match(/[MS](\d)/); return m ? Number(m[1]) : null; };
+
+/** Gói có bao phủ một yêu cầu không? Trả về {status: 'included'|'paid_addon'|'capacity'|'not_included', ...} */
+export function coverage(catalog, packagesData, ctx, feature, qty) {
+  const addons = packagesData.addons || [];
+  if (feature.capacity === 'design_level') {
+    const lv = levelOf(criterionValue(ctx, 'Giao diện thiết kế theo yêu cầu'));
+    return lv != null && qty <= lv ? { status: 'included', note: `May đo M${lv}` } : { status: 'not_included', hard: true, note: `Gói chỉ đến M${lv ?? '?'}, yêu cầu M${qty}` };
+  }
+  if (feature.capacity === 'sitemap') {
+    const lv = levelOf(criterionValue(ctx, 'Bố cục trang web'));
+    const cap = catalog.sitemap_capacity[String(lv)] ?? 0;
+    return qty <= cap ? { status: 'included', capacity: cap, note: `Sitemap S${lv} (~${cap} mẫu trang)` } : { status: 'capacity', capacity: cap, over: qty - cap, note: `Sitemap S${lv} ~${cap} mẫu trang, vượt ${qty - cap}` };
+  }
+  if (feature.capacity === 'products' || feature.capacity === 'posts') {
+    const title = feature.capacity === 'products' ? 'Số lượng sản phẩm' : 'Số lượng bài viết';
+    const cap = maxNumber(criterionValue(ctx, title)) ?? 0;
+    if (qty <= cap) return { status: 'included', capacity: cap, note: `Gói cho tối đa ${cap === Infinity ? 'không giới hạn' : cap}` };
+    const ad = addons.find((a) => a.code === (feature.capacity === 'products' ? 'ADD_PRODUCTS_20' : 'ADD_POSTS_200'));
+    const per = feature.capacity === 'products' ? 20 : 200;
+    const n = Math.ceil((qty - cap) / per);
+    return { status: 'paid_addon', addons: [{ code: ad.code, name: ad.name, qty: n, unit_price: ad.price, recurring: ad.recurring }], note: `Vượt ${qty - cap}, mua thêm ${n} × ${ad.unit}` };
+  }
+  if (!feature.criteria) return { status: 'not_included', note: 'Không có trong bảng tiêu chí gói — tính ngoài gói' };
+  for (const spec of feature.criteria) {
+    const [title, mustContain] = spec.split('=');
+    const v = criterionValue(ctx, title);
+    if (v === undefined || v === null || v === '' || v === '✕') return { status: 'not_included', note: v === '✕' ? `Gói không có "${title}"` : `Dòng gói không có tiêu chí "${title}"` };
+    if (mustContain && !v.includes(mustContain)) return { status: 'not_included', note: `"${title}" của gói là ${v}` };
+    if (/₫/.test(v) && !/miễn phí/i.test(v)) {
+      const ad = addons.find((a) => a.code === feature.addon_if_paid);
+      if (ad) return { status: 'paid_addon', addons: [{ code: ad.code, name: ad.name, qty: 1, unit_price: ad.price, recurring: ad.recurring }], note: `"${title}" tính phí ${v}` };
+    }
+  }
+  return { status: 'included', note: feature.covered_note || 'Có trong gói' };
+}
+
+/**
+ * Gắn cờ billing cho từng dòng theo gói đã chọn; tách dòng mẫu trang khi vượt sức chứa gói.
+ * Dòng có billing_override giữ nguyên lựa chọn tay.
+ */
+export function applyPackage(catalog, packagesData, ctx, lines, requirements) {
+  const reqById = Object.fromEntries(requirements.map((r) => [r.id, r]));
+  const cov = {}; const addons = [];
+  const out = [];
+  for (const l of lines) {
+    if (l.billing_override) { out.push({ ...l, billing: l.billing_override, coverage_note: 'Chọn tay' }); continue; }
+    if (!l.feature) { out.push({ ...l, billing: l.source === 'manual' ? 'extra' : 'package', coverage_note: l.source === 'manual' ? 'Dòng thêm tay' : 'Đầu việc nền của gói' }); continue; }
+    const f = featureByCode(catalog, l.feature);
+    const r = reqById[l.requirement_id];
+    const q = Number(r?.quantity ?? f.default_qty ?? 1);
+    if (!cov[l.feature + ':' + l.requirement_id]) {
+      cov[l.feature + ':' + l.requirement_id] = coverage(catalog, packagesData, ctx, f, q);
+      for (const a of cov[l.feature + ':' + l.requirement_id].addons || []) addons.push({ ...a, reason: `${r?.code || ''} ${f.title}` });
+    }
+    const c = cov[l.feature + ':' + l.requirement_id];
+    if (c.status === 'capacity' && f.capacity === 'sitemap') {
+      const inQty = Math.min(l.qty, c.capacity);
+      if (inQty > 0) out.push({ ...l, qty: inQty, billing: 'package', coverage_note: c.note });
+      if (l.qty - inQty > 0) out.push({ ...l, qty: l.qty - inQty, billing: 'extra', coverage_note: `Vượt sức chứa gói: ${c.note}` });
+      continue;
+    }
+    out.push({ ...l, billing: c.status === 'not_included' ? 'extra' : 'package', coverage_note: c.note });
+  }
+  return { lines: out, addons, coverage: cov };
+}
+
+/** Xếp hạng các gói ZERO/HERO theo tổng giá bán (gói + add-on + phần ngoài gói). */
+export function recommendPackages(catalog, packagesData, { requirements, lines, rates, policy, external = [], risks = [] }) {
+  const results = [];
+  for (const ctx of packageList(packagesData)) {
+    const applied = applyPackage(catalog, packagesData, ctx, lines, requirements);
+    const hard = Object.values(applied.coverage).find((c) => c.hard);
+    const q = computeQuote({
+      mode: 'package', rates, policy, lines: applied.lines, external, risks, addons: applied.addons,
+      package: { code: ctx.pkg.code, price: ctx.pkg.price.min, price_min: ctx.pkg.price.min, price_max: ctx.pkg.price.max, renewal_per_year: ctx.pkg.renewal_per_year },
+    });
+    const extras = applied.lines.filter((l) => l.billing === 'extra');
+    results.push({
+      code: ctx.pkg.code, name: ctx.pkg.name, line: ctx.line.id,
+      package_price: ctx.pkg.price, renewal_per_year: ctx.pkg.renewal_per_year,
+      eligible: !hard, blocker: hard?.note || null,
+      addons: applied.addons,
+      extra_lines: extras.map((l) => `${l.title} ×${l.qty}${l.coverage_note ? ' — ' + l.coverage_note : ''}`),
+      price_list: Number(q.price_list ?? 0), floor: Number(q.floor ?? 0), cost_total: Number(q.cost_total ?? 0),
+      below_floor: q.price_list != null && q.price_list < q.floor,
+    });
+  }
+  const ranked = results.filter((r) => r.eligible).sort((a, b) => a.price_list - b.price_list || a.package_price.min - b.package_price.min);
+  return { best: ranked[0] || null, ranked, ineligible: results.filter((r) => !r.eligible) };
+}

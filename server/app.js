@@ -1,0 +1,590 @@
+import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { db, one, all, run, tx, audit, loadJson, activeSetting, ROOT, DATA_DIR } from './db.js';
+import { computeQuote, toJSONSafe } from './pricing.js';
+import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode } from './estimate.js';
+import { normalizeInput } from './crawler/urls.js';
+import { renderCustomerQuote } from './quote-html.js';
+import { suggestFromBrief } from './brief.js';
+
+export const app = express();
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(path.join(ROOT, 'public')));
+app.use('/storage/runs', express.static(path.join(DATA_DIR, 'runs'), { fallthrough: false }));
+
+const catalog = () => loadJson('data/catalog.json');
+const packagesData = () => loadJson('data/packages.json');
+
+// ---------- Người dùng & phân quyền ----------
+// Phiên bản thử nghiệm: chọn người dùng qua header X-User-Id. Khi đưa vào core admin, thay bằng đăng nhập của core.
+const PERMS = {
+  'project.edit': ['sales', 'tech', 'admin'],
+  'survey.run': ['sales', 'tech', 'admin'],
+  'requirement.decide': ['sales', 'admin'],
+  'requirement.edit': ['sales', 'tech', 'admin'],
+  'estimate.edit': ['tech', 'admin'],
+  'pricing.edit': ['sales', 'pricing_manager', 'admin'],
+  'settings.edit': ['pricing_manager', 'admin'],
+  'version.create': ['sales', 'tech', 'pricing_manager', 'admin'],
+  'version.approve': ['pricing_manager', 'admin'],
+  'actuals.edit': ['tech', 'pricing_manager', 'admin'],
+  'packages.sync': ['pricing_manager', 'admin'],
+  'internal.view': ['sales', 'tech', 'pricing_manager', 'admin'],
+};
+class HttpError extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra; } }
+const need = (req, perm) => { if (!PERMS[perm].includes(req.user.role)) throw new HttpError(403, `Vai trò "${req.user.role}" không có quyền ${perm}`); };
+const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+app.get('/api/users', (req, res) => res.json(all('SELECT * FROM users ORDER BY id')));
+app.use('/api', (req, res, next) => {
+  const u = one('SELECT * FROM users WHERE id=?', Number(req.get('x-user-id') || 0));
+  if (!u) return res.status(401).json({ error: 'Chọn người dùng (X-User-Id).' });
+  req.user = u; next();
+});
+
+// ---------- Danh mục, gói, cấu hình ----------
+app.get('/api/meta', (req, res) => {
+  res.json({
+    catalog: catalog(), packages: packagesData(),
+    rate_card: parseSetting(activeSetting('rate_card')), policy: parseSetting(activeSetting('policy')),
+    settings: all('SELECT s.*, u.name approved_by_name FROM settings_versions s LEFT JOIN users u ON u.id=s.approved_by ORDER BY kind, effective_from DESC, id DESC').map(parseSetting),
+    perms: Object.fromEntries(Object.entries(PERMS).map(([k, roles]) => [k, roles.includes(req.user.role)])),
+  });
+});
+const parseSetting = (s) => (s ? { ...s, data: JSON.parse(s.data_json), data_json: undefined } : null);
+
+app.post('/api/settings', h((req, res) => {
+  need(req, 'settings.edit');
+  const { kind, version, data, effective_from, note } = req.body;
+  if (!['rate_card', 'policy'].includes(kind) || !version || !effective_from || typeof data !== 'object') throw new HttpError(400, 'Thiếu kind/version/effective_from/data');
+  if (kind === 'policy') {
+    const g = Number(data.target_margin_pct), gm = Number(data.min_margin_pct);
+    if (!(g >= 0 && g < 100 && gm >= 0 && gm < 100 && gm <= g)) throw new HttpError(400, 'Biên phải trong [0,100) và biên tối thiểu ≤ biên mục tiêu');
+  } else if (Object.values(data).some((v) => !(Number(v) > 0))) throw new HttpError(400, 'Đơn giá vai trò phải > 0');
+  tx(() => {
+    // kết thúc hiệu lực bản trước khi bản mới bắt đầu (bản cũ vẫn giữ để tái hiện báo giá đã duyệt)
+    const prev = new Date(new Date(effective_from).getTime() - 86400000).toISOString().slice(0, 10);
+    run('UPDATE settings_versions SET effective_to=? WHERE kind=? AND effective_to IS NULL AND effective_from<?', prev, kind, effective_from);
+    const r = run('INSERT INTO settings_versions (kind, version, data_json, effective_from, approved_by, note) VALUES (?,?,?,?,?,?)', kind, version, JSON.stringify(data), effective_from, req.user.id, note || null);
+    audit({ entity: 'settings', entity_id: Number(r.lastInsertRowid), user_id: req.user.id, action: 'create', after: { kind, version, data, effective_from } });
+  });
+  res.json({ ok: true });
+}));
+
+app.post('/api/packages/sync', h(async (req, res) => {
+  need(req, 'packages.sync');
+  const { syncPackages } = await import('../scripts/sync-packages.js');
+  const before = packagesData();
+  const data = await syncPackages({ log: () => {} });
+  fs.writeFileSync(path.join(ROOT, 'data/packages.json'), JSON.stringify(data, null, 2));
+  const changes = [];
+  for (const l of data.lines) for (const p of l.packages) {
+    const old = before.lines.find((x) => x.id === l.id)?.packages.find((x) => x.code === p.code);
+    if (!old) changes.push(`${p.code}: mới`);
+    else if (old.price.min !== p.price.min || old.price.max !== p.price.max) changes.push(`${p.code}: ${old.price.min}→${p.price.min}`);
+  }
+  audit({ entity: 'packages', user_id: req.user.id, action: 'sync', after: { captured_at: data.captured_at, changes } });
+  res.json({ ok: true, captured_at: data.captured_at, changes });
+}));
+
+// ---------- Hồ sơ ----------
+const STATUS_LABEL = { draft: 'Nháp', clarify: 'Cần làm rõ', estimating: 'Dự toán', pending: 'Chờ duyệt', approved: 'Đã duyệt' };
+
+app.get('/api/projects', (req, res) => {
+  const rows = all('SELECT p.*, u.name owner_name FROM projects p LEFT JOIN users u ON u.id=p.owner_id ORDER BY p.updated_at DESC');
+  res.json(rows.map((p) => { const st = projectState(p.id); return { ...p, pricing_json: undefined, status: st.status, status_label: STATUS_LABEL[st.status], price_net: st.preview?.price_net ?? null }; }));
+});
+
+app.post('/api/projects', h((req, res) => {
+  need(req, 'project.edit');
+  const b = req.body;
+  if (!b.name) throw new HttpError(400, 'Cần tên dự án');
+  const pol = parseSetting(activeSetting('policy'));
+  const id = tx(() => {
+    const n = one('SELECT COUNT(*) n FROM projects').n + 1;
+    const code = `HS${new Date().toISOString().slice(2, 7).replace('-', '')}-${String(n).padStart(3, '0')}`;
+    const r = run(`INSERT INTO projects (code, name, customer_name, customer_contact, project_type, site_kind, brief, budget, owner_id, pricing_json) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      code, b.name, b.customer_name || null, b.customer_contact || null, b.project_type || 'new', b.site_kind || 'catalog', b.brief || null, b.budget ? Number(b.budget) : null, req.user.id,
+      JSON.stringify({ mode: 'package', package_code: null, package_price: null, discount_pct: 0, extra_addons: [], recurring: [], risk_override: {}, valid_days: pol?.data.quote_valid_days ?? 30, payment_terms: pol?.data.default_payment_terms || '' }));
+    const pid = Number(r.lastInsertRowid);
+    const seen = new Set();
+    for (const u of [].concat(b.ref_urls || []).filter(Boolean)) {
+      const url = normalizeInput(u);
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const rr = run('INSERT INTO refs (project_id, url, learn_notes) VALUES (?,?,?)', pid, url, null);
+      if (PERMS['survey.run'].includes(req.user.role)) queueSurvey(pid, Number(rr.lastInsertRowid), url, 20, req.user.id);
+    }
+    for (const rk of catalog().default_risks) run('INSERT INTO risks (project_id, title, prob_pct, impact) VALUES (?,?,?,?)', pid, rk.title, rk.prob_pct, rk.impact);
+    catalog().general_questions.forEach((q, i) => run('INSERT INTO questions (project_id, code, text, blocking) VALUES (?,?,?,?)', pid, `Q${String(i + 1).padStart(3, '0')}`, q.text, q.blocking ? 1 : 0));
+    audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'create', after: b });
+    return pid;
+  });
+  res.json({ id });
+}));
+
+app.get('/api/projects/:id', h((req, res) => {
+  const id = Number(req.params.id);
+  const p = one('SELECT p.*, u.name owner_name FROM projects p LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?', id);
+  if (!p) throw new HttpError(404, 'Không có hồ sơ');
+  const st = projectState(id);
+  res.json({
+    project: { ...p, pricing: JSON.parse(p.pricing_json), pricing_json: undefined },
+    status: st.status, status_label: STATUS_LABEL[st.status],
+    refs: all('SELECT * FROM refs WHERE project_id=? ORDER BY id', id),
+    runs: all('SELECT * FROM analysis_runs WHERE project_id=? ORDER BY id DESC', id).map((r) => ({ ...r, coverage: JSON.parse(r.coverage_json || 'null'), robots: JSON.parse(r.robots_json || 'null'), templates: JSON.parse(r.templates_json || '[]'), coverage_json: undefined, robots_json: undefined, templates_json: undefined })),
+    evidence: all('SELECT * FROM evidence WHERE project_id=? ORDER BY id', id),
+    requirements: all('SELECT * FROM requirements WHERE project_id=? ORDER BY id', id).map((r) => ({ ...r, evidence_codes: JSON.parse(r.evidence_codes) })),
+    questions: all('SELECT * FROM questions WHERE project_id=? ORDER BY id', id),
+    lines: all('SELECT * FROM estimate_lines WHERE project_id=? ORDER BY sort, id', id),
+    risks: all('SELECT * FROM risks WHERE project_id=? ORDER BY id', id),
+    external: all('SELECT * FROM external_costs WHERE project_id=? ORDER BY id', id),
+    versions: all('SELECT v.id, v.version, v.status, v.quote_code, v.valid_until, v.created_at, v.approved_at, v.review_note, v.input_hash, c.name created_by_name, a.name approved_by_name, json_extract(v.result_json, \'$.price_net\') price_net FROM quote_versions v LEFT JOIN users c ON c.id=v.created_by LEFT JOIN users a ON a.id=v.approved_by WHERE v.project_id=? ORDER BY v.version DESC', id),
+    preview: st.preview, applied: st.applied, release_checks: st.release, input_hash: st.hash, meta: st.meta,
+    actuals: all('SELECT * FROM actuals WHERE project_id=? ORDER BY id', id),
+  });
+}));
+
+app.put('/api/projects/:id', h((req, res) => {
+  const id = Number(req.params.id);
+  const p = one('SELECT * FROM projects WHERE id=?', id);
+  if (!p) throw new HttpError(404, 'Không có hồ sơ');
+  if (req.body.rev != null && Number(req.body.rev) !== p.rev) throw new HttpError(409, 'Hồ sơ vừa được người khác sửa — tải lại để xem thay đổi.');
+  const fields = ['name', 'customer_name', 'customer_contact', 'project_type', 'site_kind', 'brief', 'budget'];
+  const sets = []; const vals = [];
+  if (fields.some((f) => f in req.body)) {
+    need(req, 'project.edit');
+    for (const f of fields) if (f in req.body) { sets.push(`${f}=?`); vals.push(req.body[f] === '' ? null : req.body[f]); }
+  }
+  if (req.body.pricing) {
+    need(req, 'pricing.edit');
+    const cur = JSON.parse(p.pricing_json);
+    const next = { ...cur, ...req.body.pricing };
+    const d = Number(next.discount_pct || 0);
+    if (!(d >= 0 && d < 100)) throw new HttpError(400, 'Giảm giá không hợp lệ');
+    sets.push('pricing_json=?'); vals.push(JSON.stringify(next));
+  }
+  if (!sets.length) return res.json({ ok: true });
+  run(`UPDATE projects SET ${sets.join(', ')}, rev=rev+1, updated_at=datetime('now') WHERE id=?`, ...vals, id);
+  audit({ project_id: id, entity: 'project', entity_id: id, user_id: req.user.id, action: 'update', before: pick(p, Object.keys(req.body)), after: req.body, reason: req.body.reason });
+  res.json({ ok: true });
+}));
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+
+// ---------- Web tham khảo & khảo sát ----------
+app.post('/api/projects/:id/refs', h((req, res) => {
+  need(req, 'project.edit');
+  const url = normalizeInput(req.body.url);
+  if (!url) throw new HttpError(400, 'URL không hợp lệ (chỉ http/https)');
+  const pid = Number(req.params.id);
+  if (one('SELECT id FROM refs WHERE project_id=? AND url=?', pid, url)) throw new HttpError(409, 'Web này đã có trong hồ sơ — ghi thêm phần cần học vào ghi chú của URL đó.');
+  const r = run('INSERT INTO refs (project_id, url, learn_notes) VALUES (?,?,?)', pid, url, req.body.learn_notes || null);
+  const refId = Number(r.lastInsertRowid);
+  const queued = PERMS['survey.run'].includes(req.user.role) ? queueSurvey(pid, refId, url, 20, req.user.id) : null;
+  res.json({ id: refId, survey_run_id: queued });
+}));
+app.put('/api/refs/:id', h((req, res) => { need(req, 'project.edit'); run('UPDATE refs SET learn_notes=? WHERE id=?', req.body.learn_notes || null, Number(req.params.id)); res.json({ ok: true }); }));
+app.delete('/api/refs/:id', h((req, res) => { need(req, 'project.edit'); run('DELETE FROM refs WHERE id=?', Number(req.params.id)); res.json({ ok: true }); }));
+
+app.post('/api/projects/:id/survey', h((req, res) => {
+  need(req, 'survey.run');
+  const pid = Number(req.params.id);
+  const ref = one('SELECT * FROM refs WHERE id=? AND project_id=?', Number(req.body.ref_id), pid);
+  if (!ref) throw new HttpError(400, 'Chọn web tham khảo');
+  const active = one("SELECT id FROM analysis_runs WHERE ref_id=? AND status IN ('queued','running')", ref.id);
+  if (active) throw new HttpError(409, 'Web này đang được khảo sát');
+  res.json({ id: queueSurvey(pid, ref.id, ref.url, req.body.max_urls, req.user.id) });
+}));
+
+function queueSurvey(pid, refId, url, maxUrlsRaw, userId) {
+  const maxUrls = Math.min(Math.max(Number(maxUrlsRaw) || 20, 1), 40);
+  const r = run("INSERT INTO analysis_runs (project_id, ref_id, url, status, max_urls, created_by, input_hash) VALUES (?,?,?,'queued',?,?,?)", pid, refId, url, maxUrls, userId, sha({ url, maxUrls }));
+  audit({ project_id: pid, entity: 'analysis_run', entity_id: Number(r.lastInsertRowid), user_id: userId, action: 'queue', after: { url, maxUrls } });
+  return Number(r.lastInsertRowid);
+}
+
+// Khảo sát mọi web tham khảo chưa từng quét (mỗi URL một lần)
+app.post('/api/projects/:id/survey-all', h((req, res) => {
+  need(req, 'survey.run');
+  const pid = Number(req.params.id);
+  const refs = all(`SELECT r.* FROM refs r WHERE r.project_id=? AND NOT EXISTS (SELECT 1 FROM analysis_runs a WHERE a.project_id=r.project_id AND a.url=r.url) ORDER BY r.id`, pid);
+  const seen = new Set(); const ids = [];
+  for (const r of refs) { if (seen.has(r.url)) continue; seen.add(r.url); ids.push(queueSurvey(pid, r.id, r.url, req.body.max_urls, req.user.id)); }
+  res.json({ ok: true, queued: ids.length });
+}));
+
+// Chốt nhanh: mọi yêu cầu đang chờ / hỏi lại → Làm (hoặc Bỏ)
+app.post('/api/projects/:id/requirements/bulk-decision', h((req, res) => {
+  need(req, 'requirement.decide');
+  const pid = Number(req.params.id);
+  const decision = req.body.decision === 'exclude' ? 'exclude' : 'include';
+  const rows = all("SELECT id, code FROM requirements WHERE project_id=? AND decision IN ('pending','ask')", pid);
+  tx(() => {
+    for (const r of rows) run("UPDATE requirements SET decision=?, updated_at=datetime('now') WHERE id=?", decision, r.id);
+    if (decision === 'exclude') run("UPDATE questions SET status='dropped' WHERE status='open' AND requirement_id IN (SELECT id FROM requirements WHERE project_id=? AND decision='exclude')", pid);
+    audit({ project_id: pid, entity: 'requirement', user_id: req.user.id, action: 'bulk_decision', after: { decision, codes: rows.map((r) => r.code) } });
+  });
+  res.json({ ok: true, n: rows.length });
+}));
+
+// ---------- Yêu cầu & câu hỏi ----------
+function nextCode(table, pid, prefix) {
+  const max = all(`SELECT code FROM ${table} WHERE project_id=? AND code LIKE ?`, pid, prefix + '%').reduce((m, r) => Math.max(m, Number(r.code.slice(prefix.length)) || 0), 0);
+  return prefix + String(max + 1).padStart(3, '0');
+}
+
+function addRequirement(pid, user, { feature, title, quantity, acceptance, notes, source_kind = 'client', decision = 'pending' }) {
+  const f = feature ? featureByCode(catalog(), feature) : null;
+  if (feature && !f) throw new HttpError(400, `Mã tính năng không có trong danh mục: ${feature}`);
+  const existing = feature && one('SELECT * FROM requirements WHERE project_id=? AND feature=?', pid, feature);
+  if (existing) {
+    // khách xác nhận yêu cầu đã quan sát được → nâng nguồn lên "client", giữ dẫn chứng
+    run("UPDATE requirements SET source_kind='client', quantity=COALESCE(?, quantity), acceptance=COALESCE(?, acceptance), notes=COALESCE(?, notes), updated_at=datetime('now') WHERE id=?", quantity ?? null, acceptance || null, notes || null, existing.id);
+    return existing.id;
+  }
+  const code = nextCode('requirements', pid, 'R');
+  const r = run('INSERT INTO requirements (project_id, code, feature, title, source_kind, decision, quantity, unit, acceptance, notes) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    pid, code, feature || null, title || f?.title || 'Yêu cầu', source_kind, decision, quantity ?? f?.default_qty ?? null, f?.unit || null, acceptance || null, notes || null);
+  const rid = Number(r.lastInsertRowid);
+  for (const q of f?.questions || []) run('INSERT INTO questions (project_id, code, requirement_id, text, blocking) VALUES (?,?,?,?,?)', pid, nextCode('questions', pid, 'Q'), rid, q.text, q.blocking ? 1 : 0);
+  audit({ project_id: pid, entity: 'requirement', entity_id: rid, user_id: user.id, action: 'create', after: { code, feature, title, quantity } });
+  return rid;
+}
+
+app.post('/api/projects/:id/requirements', h((req, res) => {
+  need(req, 'requirement.edit');
+  const pid = Number(req.params.id);
+  const id = tx(() => addRequirement(pid, req.user, req.body));
+  res.json({ id });
+}));
+
+app.post('/api/projects/:id/brief-suggest', h(async (req, res) => {
+  need(req, 'requirement.edit');
+  const p = one('SELECT * FROM projects WHERE id=?', Number(req.params.id));
+  const out = await suggestFromBrief(catalog(), req.body.brief ?? p.brief ?? '');
+  res.json(out);
+}));
+
+app.put('/api/requirements/:id', h((req, res) => {
+  const r = one('SELECT * FROM requirements WHERE id=?', Number(req.params.id));
+  if (!r) throw new HttpError(404, 'Không có yêu cầu');
+  const b = req.body;
+  if ('decision' in b) {
+    need(req, 'requirement.decide');
+    if (!['pending', 'include', 'exclude', 'ask'].includes(b.decision)) throw new HttpError(400, 'Quyết định không hợp lệ');
+  }
+  if (['quantity', 'acceptance', 'notes', 'title', 'priority'].some((k) => k in b)) need(req, 'requirement.edit');
+  const keys = ['decision', 'quantity', 'acceptance', 'notes', 'title', 'priority'].filter((k) => k in b);
+  if (!keys.length) return res.json({ ok: true });
+  tx(() => {
+    run(`UPDATE requirements SET ${keys.map((k) => `${k}=?`).join(', ')}, updated_at=datetime('now') WHERE id=?`, ...keys.map((k) => (b[k] === '' ? null : b[k])), r.id);
+    // bỏ yêu cầu → các câu hỏi của nó không còn chặn
+    if (b.decision === 'exclude') run("UPDATE questions SET status='dropped' WHERE requirement_id=? AND status='open'", r.id);
+    if (b.decision && b.decision !== 'exclude') run("UPDATE questions SET status='open' WHERE requirement_id=? AND status='dropped'", r.id);
+    audit({ project_id: r.project_id, entity: 'requirement', entity_id: r.id, user_id: req.user.id, action: 'update', before: pick(r, keys), after: pick(b, keys), reason: b.reason });
+  });
+  res.json({ ok: true });
+}));
+app.delete('/api/requirements/:id', h((req, res) => { need(req, 'requirement.edit'); const r = one('SELECT * FROM requirements WHERE id=?', Number(req.params.id)); run('DELETE FROM requirements WHERE id=?', r.id); audit({ project_id: r.project_id, entity: 'requirement', entity_id: r.id, user_id: req.user.id, action: 'delete', before: r }); res.json({ ok: true }); }));
+
+app.post('/api/projects/:id/questions', h((req, res) => {
+  need(req, 'requirement.edit');
+  const pid = Number(req.params.id);
+  if (!req.body.text) throw new HttpError(400, 'Nhập câu hỏi');
+  run('INSERT INTO questions (project_id, code, requirement_id, text, blocking) VALUES (?,?,?,?,?)', pid, nextCode('questions', pid, 'Q'), req.body.requirement_id || null, req.body.text, req.body.blocking ? 1 : 0);
+  res.json({ ok: true });
+}));
+app.put('/api/questions/:id', h((req, res) => {
+  need(req, 'requirement.edit');
+  const q = one('SELECT * FROM questions WHERE id=?', Number(req.params.id));
+  const answer = 'answer' in req.body ? req.body.answer : q.answer;
+  const status = req.body.status || (answer ? 'answered' : q.status);
+  const blocking = 'blocking' in req.body ? (req.body.blocking ? 1 : 0) : q.blocking;
+  run('UPDATE questions SET answer=?, status=?, blocking=? WHERE id=?', answer || null, status, blocking, q.id);
+  audit({ project_id: q.project_id, entity: 'question', entity_id: q.id, user_id: req.user.id, action: 'update', before: pick(q, ['answer', 'status', 'blocking']), after: { answer, status, blocking } });
+  res.json({ ok: true });
+}));
+
+// ---------- Bóc tách công việc ----------
+app.post('/api/projects/:id/estimate/generate', h((req, res) => {
+  need(req, 'estimate.edit');
+  const pid = Number(req.params.id);
+  const reqs = all('SELECT * FROM requirements WHERE project_id=?', pid);
+  const lines = buildAutoLines(catalog(), reqs);
+  tx(() => {
+    run("DELETE FROM estimate_lines WHERE project_id=? AND source='auto'", pid);
+    lines.forEach((l, i) => run('INSERT INTO estimate_lines (project_id, code, title, grp, role, unit, qty, o, m, p, feature, requirement_id, source, sort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      pid, l.code, l.title, l.group, l.role, l.unit, l.qty, l.o, l.m, l.p, l.feature, l.requirement_id, 'auto', i));
+    audit({ project_id: pid, entity: 'estimate', entity_id: pid, user_id: req.user.id, action: 'generate', after: { lines: lines.length } });
+  });
+  res.json({ ok: true, lines: lines.length });
+}));
+
+const LINE_FIELDS = ['title', 'grp', 'role', 'unit', 'qty', 'o', 'm', 'p', 'billing_override', 'manual_reason', 'include', 'code'];
+app.post('/api/projects/:id/lines', h((req, res) => {
+  need(req, 'estimate.edit');
+  const b = req.body; const pid = Number(req.params.id);
+  if (!b.title || !b.role || !b.grp) throw new HttpError(400, 'Cần tên, nhóm, vai trò');
+  if (!b.manual_reason) throw new HttpError(400, 'Dòng thêm tay cần lý do');
+  const r = run("INSERT INTO estimate_lines (project_id, code, title, grp, role, unit, qty, o, m, p, source, manual_reason, billing_override, sort) VALUES (?,?,?,?,?,?,?,?,?,?,'manual',?,?,999)",
+    pid, b.code || null, b.title, b.grp, b.role, b.unit || null, Number(b.qty || 1), Number(b.o || 0), Number(b.m || 0), Number(b.p || 0), b.manual_reason, b.billing_override || null);
+  audit({ project_id: pid, entity: 'estimate_line', entity_id: Number(r.lastInsertRowid), user_id: req.user.id, action: 'create', after: b, reason: b.manual_reason });
+  res.json({ ok: true });
+}));
+app.put('/api/lines/:id', h((req, res) => {
+  need(req, 'estimate.edit');
+  const l = one('SELECT * FROM estimate_lines WHERE id=?', Number(req.params.id));
+  const keys = LINE_FIELDS.filter((k) => k in req.body);
+  if (!keys.length) return res.json({ ok: true });
+  if (!req.body.reason && keys.some((k) => ['qty', 'o', 'm', 'p', 'billing_override', 'include'].includes(k))) throw new HttpError(400, 'Sửa định mức/khối lượng cần ghi lý do');
+  run(`UPDATE estimate_lines SET ${keys.map((k) => `${k}=?`).join(', ')}${req.body.reason ? ', manual_reason=?' : ''} WHERE id=?`, ...keys.map((k) => (req.body[k] === '' ? null : req.body[k])), ...(req.body.reason ? [req.body.reason] : []), l.id);
+  audit({ project_id: l.project_id, entity: 'estimate_line', entity_id: l.id, user_id: req.user.id, action: 'update', before: pick(l, keys), after: pick(req.body, keys), reason: req.body.reason });
+  res.json({ ok: true });
+}));
+app.delete('/api/lines/:id', h((req, res) => { need(req, 'estimate.edit'); const l = one('SELECT * FROM estimate_lines WHERE id=?', Number(req.params.id)); run('DELETE FROM estimate_lines WHERE id=?', l.id); audit({ project_id: l.project_id, entity: 'estimate_line', entity_id: l.id, user_id: req.user.id, action: 'delete', before: l }); res.json({ ok: true }); }));
+
+for (const [route, table, fields] of [['risks', 'risks', ['title', 'prob_pct', 'impact', 'include']], ['external', 'external_costs', ['title', 'amount', 'include']]]) {
+  app.post(`/api/projects/:id/${route}`, h((req, res) => {
+    need(req, 'estimate.edit');
+    const f = fields.filter((k) => k in req.body);
+    run(`INSERT INTO ${table} (project_id, ${f.join(', ')}) VALUES (?, ${f.map(() => '?').join(', ')})`, Number(req.params.id), ...f.map((k) => req.body[k]));
+    res.json({ ok: true });
+  }));
+  app.put(`/api/${route}/:id`, h((req, res) => {
+    need(req, 'estimate.edit');
+    const row = one(`SELECT * FROM ${table} WHERE id=?`, Number(req.params.id));
+    const f = fields.filter((k) => k in req.body);
+    if (f.length) run(`UPDATE ${table} SET ${f.map((k) => `${k}=?`).join(', ')} WHERE id=?`, ...f.map((k) => req.body[k]), row.id);
+    audit({ project_id: row.project_id, entity: table, entity_id: row.id, user_id: req.user.id, action: 'update', before: pick(row, f), after: pick(req.body, f) });
+    res.json({ ok: true });
+  }));
+  app.delete(`/api/${route}/:id`, h((req, res) => { need(req, 'estimate.edit'); run(`DELETE FROM ${table} WHERE id=?`, Number(req.params.id)); res.json({ ok: true }); }));
+}
+
+// ---------- Tính giá ----------
+function buildInput(pid) {
+  const p = one('SELECT * FROM projects WHERE id=?', pid);
+  const pricing = JSON.parse(p.pricing_json);
+  const rc = parseSetting(activeSetting('rate_card'));
+  const pol = parseSetting(activeSetting('policy'));
+  const reqs = all('SELECT * FROM requirements WHERE project_id=?', pid);
+  const dbLines = all('SELECT * FROM estimate_lines WHERE project_id=? ORDER BY sort, id', pid);
+  let lines = dbLines.map((l) => ({ id: l.id, code: l.code, title: l.title, group: l.grp, role: l.role, unit: l.unit, qty: l.qty, o: l.o, m: l.m, p: l.p, feature: l.feature, requirement_id: l.requirement_id, source: l.source, billing_override: l.billing_override, include: !!l.include }));
+  // Chưa bấm "Sinh dự toán" → dùng định mức chuẩn tạm thời để luôn có giá xem trước.
+  const provisionalLines = !dbLines.length && reqs.some((r) => r.decision === 'include');
+  if (provisionalLines) lines = buildAutoLines(catalog(), reqs).map((l) => ({ ...l, provisional: true }));
+  const pkgData = packagesData();
+  let pkg = null; let addons = []; let applied = null;
+  const mode = pricing.mode === 'cost' ? 'cost' : 'package';
+  const rates = rc?.data || {}; const policy = pol?.data || {};
+  const external = all('SELECT title, amount, include FROM external_costs WHERE project_id=?', pid).map((e) => ({ ...e, include: !!e.include }));
+  const risks = all('SELECT title, prob_pct, impact, include FROM risks WHERE project_id=?', pid).map((r) => ({ ...r, include: !!r.include }));
+  // Chưa chọn gói → tạm dùng gói đề xuất rẻ nhất (vẫn phải bấm "Chọn" để chốt trước khi phát hành).
+  let packageCode = pricing.package_code; let autoPackage = false;
+  if (mode === 'package' && !packageCode && reqs.some((r) => r.decision === 'include')) {
+    const rec = recommendPackages(catalog(), pkgData, { requirements: reqs, lines, rates, policy, external, risks });
+    if (rec.best) { packageCode = rec.best.code; autoPackage = true; }
+  }
+  if (mode === 'package' && packageCode) {
+    const ctx = findPackage(pkgData, packageCode);
+    if (ctx) {
+      applied = applyPackage(catalog(), pkgData, ctx, lines, reqs);
+      lines = applied.lines;
+      addons = applied.addons;
+      const price = !autoPackage && pricing.package_price != null && pricing.package_price !== '' ? Number(pricing.package_price) : ctx.pkg.price.min;
+      pkg = { code: ctx.pkg.code, name: ctx.pkg.name, line: ctx.line.id, price, price_min: ctx.pkg.price.min, price_max: ctx.pkg.price.max, renewal_per_year: ctx.pkg.renewal_per_year, highlights: ctx.pkg.highlights, source_url: ctx.line.source_url, auto: autoPackage };
+    }
+  }
+  for (const a of pricing.extra_addons || []) addons.push(a);
+  const input = {
+    mode, rates, policy, lines, external, risks,
+    risk_override: pricing.risk_override || {}, package: pkg, addons, recurring: pricing.recurring || [], discount_pct: Number(pricing.discount_pct || 0),
+  };
+  const meta = { rate_card: rc && { id: rc.id, version: rc.version, effective_to: rc.effective_to }, policy: pol && { id: pol.id, version: pol.version }, catalog_version: catalog().version, packages_captured_at: pkgData.captured_at, provisional_lines: provisionalLines, auto_package: autoPackage ? packageCode : null };
+  return { p, pricing, input, meta, reqs, applied };
+}
+
+function releaseChecks(pid, b, result) {
+  const out = [];
+  const add = (level, code, message) => out.push({ level, code, message });
+  for (const c of result.checks || []) if (!out.some((x) => x.code === c.code)) out.push(c);
+  if (!b.meta.rate_card) add('error', 'NO_RATE_CARD', 'Không có bảng đơn giá còn hiệu lực.');
+  if (!b.meta.policy) add('error', 'NO_POLICY', 'Không có chính sách giá còn hiệu lực.');
+  const undecided = b.reqs.filter((r) => r.decision === 'pending' || r.decision === 'ask');
+  if (!b.reqs.some((r) => r.decision === 'include')) add('error', 'NO_SCOPE', 'Chưa có yêu cầu nào được chọn làm.');
+  if (undecided.length) add('error', 'UNDECIDED', `${undecided.length} yêu cầu chưa có quyết định rõ (làm/bỏ): ${undecided.map((r) => r.code).join(', ')}`);
+  const blocking = all(`SELECT q.code FROM questions q LEFT JOIN requirements r ON r.id=q.requirement_id WHERE q.project_id=? AND q.blocking=1 AND q.status='open' AND (r.id IS NULL OR r.decision!='exclude')`, pid);
+  if (blocking.length) add('error', 'BLOCKING_QUESTIONS', `Còn câu hỏi chặn chưa trả lời: ${blocking.map((q) => q.code).join(', ')}`);
+  const noQty = b.reqs.filter((r) => r.decision === 'include' && (r.quantity == null || r.quantity === ''));
+  if (noQty.length) add('error', 'NO_QUANTITY', `Yêu cầu chưa có khối lượng: ${noQty.map((r) => r.code).join(', ')}`);
+  const noAcc = b.reqs.filter((r) => r.decision === 'include' && !r.acceptance && featureByCode(catalog(), r.feature)?.questions?.some((q) => q.blocking));
+  if (noAcc.length) add('warn', 'NO_ACCEPTANCE', `Yêu cầu nghiệp vụ nên có tiêu chí nghiệm thu: ${noAcc.map((r) => r.code).join(', ')}`);
+  const includedNoLines = b.reqs.filter((r) => r.decision === 'include' && r.feature && featureByCode(catalog(), r.feature)?.items.length && !b.input.lines.some((l) => l.requirement_id === r.id));
+  if (includedNoLines.length && !b.meta.provisional_lines) add('error', 'REQ_NOT_ESTIMATED', `Yêu cầu đã chọn nhưng chưa có dòng dự toán (bấm "Sinh dự toán"): ${includedNoLines.map((r) => r.code).join(', ')}`);
+  const orphan = b.input.lines.filter((l) => l.requirement_id && b.reqs.find((r) => r.id === l.requirement_id)?.decision === 'exclude');
+  if (orphan.length) add('error', 'EXCLUDED_IN_ESTIMATE', 'Có dòng dự toán thuộc yêu cầu đã bỏ — sinh lại dự toán.');
+  if (b.input.mode === 'package' && !b.input.package && !out.some((c) => c.code === 'PACKAGE_MISSING')) add('error', 'PACKAGE_MISSING', 'Chưa chọn gói matbao.ws.');
+  if (b.meta.auto_package) add('error', 'PACKAGE_NOT_CONFIRMED', `Đang tạm dùng gói đề xuất ${b.meta.auto_package} — bấm "Chọn" ở bảng đề xuất (tab Tính giá) để chốt gói.`);
+  if (b.meta.provisional_lines) add('error', 'ESTIMATE_NOT_SAVED', 'Giá đang tính theo định mức chuẩn tạm thời — bấm "Sinh dự toán" ở tab Bóc tách công việc để kỹ thuật rà soát và lưu.');
+  const maxSales = Number(b.input.policy.sales_max_discount_pct ?? 0);
+  if (b.input.discount_pct > maxSales) add('warn', 'DISCOUNT_NEEDS_MANAGER', `Giảm ${b.input.discount_pct}% vượt hạn mức sales (${maxSales}%) — cần quản lý giá duyệt ngoại lệ.`);
+  if (!b.pricing.payment_terms) add('error', 'NO_PAYMENT_TERMS', 'Thiếu điều kiện thanh toán.');
+  if (!(Number(b.pricing.valid_days) > 0)) add('error', 'NO_VALIDITY', 'Thiếu thời hạn hiệu lực báo giá.');
+  return out;
+}
+
+function projectState(pid) {
+  const b = buildInput(pid);
+  const result = toJSONSafe(computeQuote(b.input));
+  const release = releaseChecks(pid, b, result);
+  const decisions = b.reqs.map((r) => [r.code, r.decision, r.quantity, r.acceptance]);
+  const questions = all('SELECT code, status, blocking, answer FROM questions WHERE project_id=? ORDER BY id', pid);
+  const hash = sha({ input: b.input, decisions, questions, pricing: b.pricing });
+  const latest = one('SELECT status, input_hash FROM quote_versions WHERE project_id=? ORDER BY version DESC LIMIT 1', pid);
+  let status;
+  if (latest && latest.input_hash === hash && latest.status === 'approved') status = 'approved';
+  else if (latest && latest.input_hash === hash && latest.status === 'pending') status = 'pending';
+  else if (release.some((c) => c.code === 'BLOCKING_QUESTIONS' || c.code === 'UNDECIDED') && b.reqs.length) status = 'clarify';
+  else if (b.reqs.length || b.input.lines.length) status = 'estimating';
+  else status = 'draft';
+  return { status, preview: result, release, hash, meta: b.meta, applied: b.applied && { coverage: b.applied.coverage, addons: b.applied.addons }, build: b };
+}
+
+app.get('/api/projects/:id/recommend', h((req, res) => {
+  const pid = Number(req.params.id);
+  const b = buildInput(pid);
+  const reqs = b.reqs;
+  let lines = all('SELECT * FROM estimate_lines WHERE project_id=?', pid).map((l) => ({ ...l, group: l.grp, include: !!l.include }));
+  if (!lines.length) lines = buildAutoLines(catalog(), reqs); // chưa sinh dự toán thì dùng định mức chuẩn để so sánh
+  res.json(recommendPackages(catalog(), packagesData(), { requirements: reqs, lines, rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks }));
+}));
+
+// ---------- Phiên bản, duyệt, xuất ----------
+const sha = (o) => crypto.createHash('sha256').update(JSON.stringify(o)).digest('hex');
+
+app.post('/api/projects/:id/versions', h((req, res) => {
+  need(req, 'version.create');
+  const pid = Number(req.params.id);
+  const st = projectState(pid);
+  const b = st.build;
+  const latest = one('SELECT * FROM quote_versions WHERE project_id=? ORDER BY version DESC LIMIT 1', pid);
+  if (latest && latest.input_hash === st.hash && latest.status !== 'rejected') return res.json({ id: latest.id, reused: true }); // chống tạo trùng khi bấm/gửi lại
+  const id = tx(() => {
+    const version = (latest?.version || 0) + 1;
+    const validUntil = new Date(Date.now() + Number(b.pricing.valid_days || 30) * 86400000).toISOString().slice(0, 10);
+    const snapshot = {
+      project: pick(b.p, ['id', 'code', 'name', 'customer_name', 'customer_contact', 'project_type', 'site_kind', 'brief']),
+      pricing: b.pricing, input: b.input, meta: b.meta,
+      requirements: b.reqs.map((r) => pick(r, ['id', 'code', 'feature', 'title', 'source_kind', 'decision', 'quantity', 'unit', 'acceptance', 'evidence_codes'])),
+      questions: all('SELECT code, text, blocking, status, answer, requirement_id FROM questions WHERE project_id=?', pid),
+      exclusions_standard: catalog().standard_exclusions,
+      release_checks: st.release,
+    };
+    const r = run(`INSERT INTO quote_versions (project_id, version, status, quote_code, valid_until, payment_terms, snapshot_json, result_json, input_hash, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      pid, version, 'draft', `BG-${b.p.code}-V${version}`, validUntil, b.pricing.payment_terms || '', JSON.stringify(snapshot), JSON.stringify(st.preview), st.hash, req.user.id);
+    audit({ project_id: pid, entity: 'quote_version', entity_id: Number(r.lastInsertRowid), user_id: req.user.id, action: 'create', after: { version, price_net: st.preview.price_net } });
+    return Number(r.lastInsertRowid);
+  });
+  res.json({ id });
+}));
+
+function getVersion(id) {
+  const v = one('SELECT v.*, c.name created_by_name, a.name approved_by_name, s.name submitted_by_name FROM quote_versions v LEFT JOIN users c ON c.id=v.created_by LEFT JOIN users a ON a.id=v.approved_by LEFT JOIN users s ON s.id=v.submitted_by WHERE v.id=?', id);
+  if (!v) throw new HttpError(404, 'Không có phiên bản');
+  return { ...v, snapshot: JSON.parse(v.snapshot_json), result: JSON.parse(v.result_json), snapshot_json: undefined, result_json: undefined };
+}
+app.get('/api/versions/:id', h((req, res) => res.json(getVersion(Number(req.params.id)))));
+
+app.post('/api/versions/:id/:action(submit|approve|reject)', h((req, res) => {
+  const v = getVersion(Number(req.params.id));
+  const action = req.params.action;
+  const st = projectState(v.project_id);
+  if (action === 'submit') {
+    need(req, 'version.create');
+    if (v.status !== 'draft') throw new HttpError(409, 'Chỉ gửi duyệt bản nháp');
+    if (st.hash !== v.input_hash) throw new HttpError(409, 'Dữ liệu hồ sơ đã đổi sau khi tạo phiên bản — tạo phiên bản mới.');
+    const errors = v.snapshot.release_checks.filter((c) => c.level === 'error');
+    if (errors.length) throw new HttpError(422, 'Chưa đạt điều kiện phát hành', { checks: errors });
+    run("UPDATE quote_versions SET status='pending', submitted_by=?, submitted_at=datetime('now') WHERE id=? AND status='draft'", req.user.id, v.id);
+  } else {
+    need(req, 'version.approve');
+    if (v.status !== 'pending') throw new HttpError(409, 'Chỉ duyệt/từ chối bản đang chờ duyệt');
+    if (action === 'approve') {
+      if (st.hash !== v.input_hash) throw new HttpError(409, 'Dữ liệu hồ sơ đã đổi sau khi gửi duyệt — cần tạo phiên bản mới.');
+      if (v.snapshot.release_checks.some((c) => c.level === 'error')) throw new HttpError(422, 'Phiên bản còn lỗi chặn');
+      if (v.submitted_by === req.user.id && req.user.role !== 'admin') throw new HttpError(403, 'Người gửi duyệt không tự duyệt bản của mình');
+      run("UPDATE quote_versions SET status='approved', approved_by=?, approved_at=datetime('now'), review_note=? WHERE id=? AND status='pending'", req.user.id, req.body.note || null, v.id);
+    } else {
+      if (!req.body.note) throw new HttpError(400, 'Từ chối cần ghi lý do');
+      run("UPDATE quote_versions SET status='rejected', approved_by=?, approved_at=datetime('now'), review_note=? WHERE id=? AND status='pending'", req.user.id, req.body.note, v.id);
+    }
+  }
+  audit({ project_id: v.project_id, entity: 'quote_version', entity_id: v.id, user_id: req.user.id, action, reason: req.body.note });
+  res.json({ ok: true });
+}));
+
+// Bản gửi khách: chỉ bản đã duyệt; không chứa chi phí nội bộ, biên lợi nhuận hay đơn giá nhân sự.
+app.get('/quote/:id', h((req, res) => {
+  const v = getVersion(Number(req.params.id));
+  if (v.status !== 'approved' && req.query.preview !== '1') throw new HttpError(403, 'Chỉ xuất bản cho khách từ phiên bản đã duyệt.');
+  res.type('html').send(renderCustomerQuote(v, { draft: v.status !== 'approved' }));
+}));
+app.get('/quote/:id/pdf', h(async (req, res) => {
+  const v = getVersion(Number(req.params.id));
+  if (v.status !== 'approved') throw new HttpError(403, 'Chỉ xuất PDF từ phiên bản đã duyệt.');
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.route('**/*', (r) => (r.request().url().startsWith('data:') ? r.continue() : r.abort())); // không tải tài nguyên ngoài
+    await page.setContent(renderCustomerQuote(v, { draft: false }), { waitUntil: 'load' });
+    const pdf = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '14mm', bottom: '14mm', left: '12mm', right: '12mm' } });
+    res.type('pdf').set('Content-Disposition', `attachment; filename="${v.quote_code}.pdf"`).send(pdf);
+  } finally { await browser.close(); }
+}));
+
+// ---------- Sau bàn giao & hiệu chỉnh ----------
+app.post('/api/projects/:id/actuals', h((req, res) => {
+  need(req, 'actuals.edit');
+  const pid = Number(req.params.id);
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  tx(() => {
+    run('DELETE FROM actuals WHERE project_id=?', pid);
+    for (const r of rows) {
+      if (!r.title) continue;
+      run('INSERT INTO actuals (project_id, quote_version_id, code, title, grp, hours_estimated, hours_actual, scope, cause, note) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        pid, req.body.quote_version_id || null, r.code || null, r.title, r.grp || null, Number(r.hours_estimated || 0), Number(r.hours_actual || 0), ['original', 'change', 'bugfix', 'rework'].includes(r.scope) ? r.scope : 'original', r.cause || null, r.note || null);
+    }
+    audit({ project_id: pid, entity: 'actuals', entity_id: pid, user_id: req.user.id, action: 'save', after: { rows: rows.length } });
+  });
+  res.json({ ok: true });
+}));
+
+app.get('/api/metrics', h((req, res) => {
+  const projects = all(`SELECT p.id, p.code, p.name, SUM(CASE WHEN a.scope='original' THEN a.hours_estimated ELSE 0 END) est,
+      SUM(CASE WHEN a.scope IN ('original','bugfix','rework') THEN a.hours_actual ELSE 0 END) act,
+      SUM(CASE WHEN a.scope='change' THEN a.hours_actual ELSE 0 END) change_hours
+    FROM actuals a JOIN projects p ON p.id=a.project_id GROUP BY p.id HAVING act > 0`);
+  const sumAct = projects.reduce((s, p) => s + p.act, 0);
+  const sumAbs = projects.reduce((s, p) => s + Math.abs(p.est - p.act), 0);
+  const sumEst = projects.reduce((s, p) => s + p.est, 0);
+  const byGroup = all(`SELECT grp, SUM(hours_estimated) est, SUM(hours_actual) act FROM actuals WHERE scope IN ('original','bugfix','rework') GROUP BY grp`);
+  res.json({
+    n: projects.length,
+    wape_pct: sumAct ? Math.round((sumAbs / sumAct) * 10000) / 100 : null,
+    bias_pct: sumAct ? Math.round(((sumEst - sumAct) / sumAct) * 10000) / 100 : null,
+    under20_pct: projects.length ? Math.round((projects.filter((p) => p.est < 0.8 * p.act).length / projects.length) * 10000) / 100 : null,
+    projects, by_group: byGroup,
+    note: 'Sai lệch tính trên giờ phạm vi gốc (đã tách thay đổi phạm vi). Mục tiêu thí điểm: WAPE ≤ 20% trên ≥ 30 hồ sơ đủ dữ liệu.',
+  });
+}));
+
+app.get('/api/projects/:id/audit', h((req, res) => res.json(all('SELECT a.*, u.name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE a.project_id=? ORDER BY a.id DESC LIMIT 300', Number(req.params.id)))));
+
+app.use((err, req, res, next) => {
+  const status = err.status || 500;
+  if (status >= 500) console.error(err);
+  res.status(status).json({ error: err.message, ...(err.extra || {}) });
+});
