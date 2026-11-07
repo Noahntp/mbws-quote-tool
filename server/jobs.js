@@ -9,6 +9,7 @@ import path from 'node:path';
 import { waitUntil } from '@vercel/functions';
 import { one, all, run, tx, audit, DATA_DIR, ROOT, loadJson, IS_SERVERLESS } from './db.js';
 import { assessComplexity, measureFromScan } from './complexity.js';
+import { estimateStorage } from './volume.js';
 
 const MAX_ATTEMPTS = 2;
 const BUDGET_MS = Number(process.env.CRAWLER_BUDGET_MS || (IS_SERVERLESS ? 190000 : 240000));
@@ -113,12 +114,14 @@ async function nextCode(table, projectId, prefix) {
 }
 
 const RANK = { observed: 3, client: 3, inferred: 2, unverified: 1 };
+// Khối lượng tự điền từ web mẫu (sale sửa được; số sale nhập không bị lần quét sau ghi đè)
+const AUTO_QTY = ['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE'];
 
 // Phạm vi của web mẫu = tính năng THẤY RÕ trên web (dẫn chứng observed) + số mẫu trang đếm được.
 // Tính năng khách thêm từ mô tả hay tick tay sau đó là phần PHÁT SINH so với giá gốc này.
 export async function baselineFromEvidence(projectId) {
   const seen = new Set((await all("SELECT DISTINCT feature FROM evidence WHERE project_id=? AND verification='observed' AND feature IS NOT NULL", projectId)).map((r) => r.feature));
-  if (await one("SELECT 1 AS x FROM evidence WHERE project_id=? AND feature='PAGES'", projectId)) seen.add('PAGES');
+  for (const f of AUTO_QTY) if (await one('SELECT 1 AS x FROM evidence WHERE project_id=? AND feature=?', projectId, f)) seen.add(f); // khối lượng web mẫu
   if (await one("SELECT 1 AS x FROM evidence WHERE project_id=? AND kind='complexity'", projectId)) seen.add('DESIGN_LEVEL'); // mức may đo theo độ phức tạp web mẫu
   const features = {};
   for (const r of await all('SELECT feature, quantity FROM requirements WHERE project_id=? AND feature IS NOT NULL', projectId)) if (seen.has(r.feature)) features[r.feature] = r.quantity ?? 1;
@@ -192,14 +195,23 @@ export async function ingest(job, res) {
     const prodCount = Math.max(prodByTpl, res.sitemap?.product_urls || 0);
     if (prodCount) {
       const how = (res.sitemap?.product_urls || 0) >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
-      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — chỉ để tham khảo, khách quyết định số cần nhập`, verification: 'inferred' });
+      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prodCount;
     }
     const postCount = Math.max(sumUrls((t) => t.template === 'blog:detail'), res.sitemap?.post_urls || 0);
     if (postCount) {
-      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu — chỉ để tham khảo, khách quyết định số cần nhập`, verification: 'inferred' });
+      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_POSTS = { codes: [code], best: 'inferred' }; quantities.DATA_POSTS = postCount;
     }
+    // Dự đoán dung lượng lưu trữ theo khối lượng web mẫu (công thức công khai ở volume.js)
+    const totalUrls = Math.max(res.coverage?.discovered || 0, res.coverage?.estimated_urls || 0);
+    let storage = null;
+    if (res.metrics) {
+      storage = estimateStorage({ pages: totalUrls, products: prodCount, posts: postCount, imgBytes: res.metrics.img_bytes, imgSized: res.metrics.img_sized });
+      const code = await addEv({ url: res.input, kind: 'storage', feature: 'HOSTING_STORAGE', detail: `Dự đoán ~${storage.gb} GB lưu trữ: ${storage.how}`, verification: 'inferred' });
+      featureEv.HOSTING_STORAGE = { codes: [code], best: 'inferred' }; quantities.HOSTING_STORAGE = storage.gb;
+    }
+    const volumes = { urls: totalUrls, templates: quantities.PAGES ?? null, products: prodCount || 0, posts: postCount || 0, storage };
 
     // Độ phức tạp web mẫu → mức may đo M1–M8 (quyết định gói tối thiểu và vị trí giá trong khoảng của gói)
     // Chỉ dùng bảng tiêu chí công khai (quy mô, độ dày giao diện, menu, ngôn ngữ, nền tảng) — tính năng đã tính qua gói, không cộng lại.
@@ -224,23 +236,26 @@ export async function ingest(job, res) {
         const codes = [...new Set([...JSON.parse(existing.evidence_codes), ...ev.codes])];
         await run("UPDATE requirements SET evidence_codes=?, updated_at=datetime('now') WHERE id=?", JSON.stringify(codes), existing.id);
         // quét lại: mức may đo theo đánh giá mới, trừ khi người dùng đã tự chỉnh
+        // khối lượng (mẫu trang, sản phẩm, bài viết, dung lượng) theo lần quét mới, trừ khi sale đã tự nhập số
+        if (AUTO_QTY.includes(feature) && existing.source_kind !== 'client' && quantities[feature] != null) await run('UPDATE requirements SET quantity=?, decision=? WHERE id=?', quantities[feature], existing.decision === 'pending' ? 'include' : existing.decision, existing.id);
         // (giữ lựa chọn "Tiết kiệm" = đã bỏ mức may đo; chỉ bật lại nếu đang chờ quyết định)
         if (feature === 'DESIGN_LEVEL' && existing.source_kind !== 'client') await run('UPDATE requirements SET quantity=?, decision=? WHERE id=?', quantities.DESIGN_LEVEL, existing.decision === 'pending' ? 'include' : existing.decision, existing.id);
         continue;
       }
       const code = await nextCode('requirements', job.project_id, 'R');
       const qty = quantities[feature] ?? f.default_qty ?? 1;
-      const autoInclude = ev.best === 'observed' || feature === 'PAGES' || feature === 'DESIGN_LEVEL';
+      const autoInclude = ev.best === 'observed' || AUTO_QTY.includes(feature) || feature === 'DESIGN_LEVEL';
       const r = await run(`INSERT INTO requirements (project_id, code, feature, title, source_kind, evidence_codes, decision, quantity, unit) VALUES (?,?,?,?,?,?,?,?,?)`,
         job.project_id, code, feature, f.title, ev.best === 'observed' ? 'observed' : 'inferred', JSON.stringify(ev.codes), autoInclude ? 'include' : 'pending', qty, f.unit);
       for (const q of f.questions || []) {
         await run('INSERT INTO questions (project_id, code, requirement_id, text, blocking) VALUES (?,?,?,?,?)', job.project_id, await nextCode('questions', job.project_id, 'Q'), Number(r.lastInsertRowid), q.text, q.blocking ? 1 : 0);
       }
     }
-    if (complexity) {
+    if (complexity || res.ok) {
       const row = await one('SELECT pricing_json FROM projects WHERE id=?', job.project_id);
       const pricing = JSON.parse(row?.pricing_json || '{}');
-      pricing.complexity = { ...complexity, url: job.url, at: new Date().toISOString() };
+      if (complexity) pricing.complexity = { ...complexity, url: job.url, at: new Date().toISOString() };
+      if (res.ok) pricing.volumes = { ...volumes, url: job.url };
       await run('UPDATE projects SET pricing_json=? WHERE id=?', JSON.stringify(pricing), job.project_id);
     }
     if (res.ok) {

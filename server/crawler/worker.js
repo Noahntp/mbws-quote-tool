@@ -270,6 +270,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     pages: ms.length, max_elements: mx('elements'), avg_elements: Math.round(ms.reduce((n, x) => n + x.elements, 0) / ms.length),
     max_nav_links: mx('nav_links'), max_carousels: mx('carousels'), max_animated: mx('animated'), max_height: mx('height'),
     max_forms: mx('forms'), max_languages: mx('languages'), framework: ms.find((x) => x.framework)?.framework || null,
+    img_bytes: ms.reduce((n, x) => n + (x.img_bytes || 0), 0), img_sized: ms.reduce((n, x) => n + (x.img_sized || 0), 0),
   } : null;
   return finish(true);
 }

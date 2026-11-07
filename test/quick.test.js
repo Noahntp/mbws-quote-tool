@@ -113,6 +113,9 @@ test('đo lường minh bạch: bảng tiêu chí, sale chỉnh được, hai ph
       { feature: 'CART', detail: 'Nút thêm vào giỏ', verification: 'observed' }, { feature: 'SEARCH', detail: 'Ô tìm kiếm', verification: 'observed' }] }],
   });
   let q = (await api(`/api/projects/${id}/quick`)).json;
+  // khối lượng web mẫu tự điền: dung lượng dự đoán, số trang
+  assert.equal(q.volumes.urls, 197);
+  assert.ok(q.volumes.storage.gb >= 0.5 && q.baseline.features.HOSTING_STORAGE === q.volumes.storage.gb);
   assert.equal(q.complexity.rows.length, 5);
   assert.equal(q.complexity.level, 4); // 197 trang (không đọc được sitemap) + Next.js + giao diện vừa
   assert.equal(q.options.mode, 'match');
@@ -143,4 +146,27 @@ test('đo lường minh bạch: bảng tiêu chí, sale chỉnh được, hai ph
   assert.match(html, /Cơ sở xác định mức thiết kế/);
   assert.match(html, /Quy mô web/);
   assert.match(html, /Phương án tiết kiệm/);
+});
+
+test('ngân sách khách lưu dạng số; tự điền số sản phẩm / bài viết từ web mẫu, số sale sửa không bị quét lại ghi đè', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['shop-mau.vn'] });
+  assert.equal((await api(`/api/projects/${id}`, 'PUT', { budget: 10000000 })).status, 200);
+  assert.equal((await api(`/api/projects/${id}`)).json.project.budget, 10000000);
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId);
+  const scan = { ok: true, input: 'https://shop-mau.vn/', sitemap: { status: 'found', product_urls: 120, post_urls: 30 }, coverage: { discovered: 180 },
+    templates: [{ template: 'home', kind: 'home', url_count: 1 }, { template: 'product:detail', kind: 'product', url_count: 120 }, { template: 'blog:detail', kind: 'blog', url_count: 30 }],
+    metrics: { pages: 3, max_elements: 900, max_nav_links: 20, max_languages: 0, framework: null }, pages: [] };
+  await ingest({ id: runId, project_id: id, url: 'https://shop-mau.vn/' }, scan);
+  let reqs = (await api(`/api/projects/${id}`)).json.requirements;
+  const by = (f) => reqs.find((r) => r.feature === f);
+  assert.equal(by('DATA_PRODUCTS').decision, 'include'); assert.equal(by('DATA_PRODUCTS').quantity, 120);
+  assert.equal(by('DATA_POSTS').quantity, 30);
+  assert.equal(by('HOSTING_STORAGE').decision, 'include');
+  // sale sửa số sản phẩm → quét lại không ghi đè
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'DATA_PRODUCTS', include: true, quantity: 50 });
+  await ingest({ id: runId, project_id: id, url: 'https://shop-mau.vn/' }, scan);
+  reqs = (await api(`/api/projects/${id}`)).json.requirements;
+  assert.equal(by('DATA_PRODUCTS').quantity, 50);
+  assert.equal(by('DATA_POSTS').quantity, 30);
 });

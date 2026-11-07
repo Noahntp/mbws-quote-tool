@@ -179,6 +179,11 @@ export function detectInPage() {
     height: Math.round(document.documentElement.scrollHeight), text_len: text.length, framework,
     languages: Math.max(hreflang.length, langCodes.length),
   };
+  try {
+    const imgs = performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'img' || /\.(jpe?g|png|webp|gif|avif)(\?|$)/i.test(e.name));
+    const sized = imgs.map((e) => e.encodedBodySize || e.transferSize || 0).filter((b) => b > 0);
+    metrics.img_bytes = sized.reduce((n, b) => n + b, 0); metrics.img_sized = sized.length;
+  } catch { metrics.img_bytes = 0; metrics.img_sized = 0; }
 
   const gen = document.querySelector('meta[name=generator]')?.getAttribute('content')
     || (scriptSrcs.some((s) => s.includes('/wp-content/') || s.includes('/wp-includes/')) ? 'WordPress' : scriptSrcs.some((s) => s.includes('cdn.shopify')) ? 'Shopify' : scriptSrcs.some((s) => s.includes('haravan')) ? 'Haravan' : scriptSrcs.some((s) => /bizweb|sapo/.test(s)) ? 'Sapo' : null);

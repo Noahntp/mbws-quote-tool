@@ -282,6 +282,7 @@ function renderQuick() {
       <div class="grid2">
         <label class="f">Khách hàng<input data-qinfo="customer_name" value="${esc(p.customer_name || '')}"></label>
         <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
+        <label class="f">Ngân sách của khách<input data-qinfo="budget" inputmode="decimal" value="${p.budget ? esc(Number(p.budget).toLocaleString('vi-VN')) : ''}" placeholder="vd: 10tr hoặc 10.000.000"></label>
       </div>
       <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
         <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
@@ -294,6 +295,7 @@ function renderQuick() {
       ${S.quick?.baseline ? `<p class="small muted" style="margin:0 0 6px">Đã tick sẵn ${S.quick.baseline.count} tính năng thấy trên ${esc(domainLabel(S.quick.baseline.domain))}. Mỗi mục chưa chọn ghi sẵn giá cộng thêm nếu chọn.</p>` : ''}
       ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
       <div class="row">${QUICK_QTY.map(qty).join('')}</div>
+      ${volumesHtml(S.quick?.volumes)}
       ${cap ? `<p class="small muted" style="margin:6px 0 0">Gói <b>${esc(pkgCode)}</b> gồm: ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '')} · ${esc(cap.posts || '')} · hosting ${esc(cap.hosting || 'theo dự án')}. Vượt số sản phẩm/bài viết/dung lượng sẽ cộng phí mua thêm (gia hạn hằng năm).</p>` : ''}
       <p class="small muted" style="margin:12px 0 6px">Tính năng xếp theo gói matbao.ws: chọn mục ở nhóm cao hơn thì giá chuyển lên gói đó (hoặc tính thêm nếu rẻ hơn).</p>
       <div class="tiers">${featureGroups().map(tierCard).join('')}</div>
@@ -303,6 +305,7 @@ function renderQuick() {
     <div class="panel" style="position:sticky;top:64px;border-color:var(--accent)">
       <h3 style="margin-top:0">3. Giá</h3>
       ${priceStepsHtml(P, r, pkg, running)}
+      ${budgetHtml(P, r)}
       ${!included.length ? (running.length ? '' : `<p class="muted">Nhập tên miền web mẫu (hoặc tick tính năng) để ra giá.</p>`) : `
       <details ${S.quick?.baseline ? '' : 'open'} style="margin-top:8px"><summary class="small">Chi tiết theo gói ${esc(pkg?.code || '')}</summary>
       <table style="margin-top:6px"><tbody>
@@ -326,6 +329,31 @@ const money = (n) => { const a = Math.abs(Number(n) || 0); const s = a >= 1e6 ? 
 const domainLabel = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || 'web mẫu'; } };
 
 const LEVEL_NAME = { 1: 'Tối giản', 2: 'Cơ bản', 3: 'Tiêu chuẩn', 4: 'Mở rộng', 5: 'Nâng cao', 6: 'Phức tạp', 7: 'Chuyên sâu', 8: 'Cao cấp' };
+// Khối lượng web mẫu đã tự điền vào các ô số lượng (sale sửa được)
+function volumesHtml(V) {
+  if (!V) return '';
+  const st = V.storage;
+  return `<p class="small muted" style="margin:6px 0 0">Tự điền từ web mẫu: ${num(V.urls, 0)} trang (${num(V.templates || 0, 0)} mẫu trang) · ~${num(V.products, 0)} sản phẩm · ~${num(V.posts, 0)} bài viết${st ? ` · dự đoán <b>${num(st.gb, 1)} GB</b> lưu trữ <span title="${esc(st.how)}" style="cursor:help;text-decoration:underline dotted">(cách tính)</span>` : ''}. Sửa ô nào thì giữ số đã sửa khi quét lại.</p>`;
+}
+// So với ngân sách khách (giá đã gồm VAT): trong / vượt, gợi ý phương án vừa túi tiền
+function budgetHtml(P, r) {
+  const b = Number(P.project.budget || 0);
+  if (!b || !r) return '';
+  const price = Number(r.total_incl_vat || 0); const O = S.quick?.options;
+  if (price <= b) return `<div class="small" style="margin-top:8px">${chip('Trong ngân sách', 'ok')} Ngân sách khách ${vnd(b)} · còn dư ${money(b - price)} <span class="muted">(so với giá đã gồm VAT)</span></div>`;
+  const ecoVat = O ? Math.round(O.economy.price * (1 + Number(r.vat_pct || 0) / 100)) : null;
+  const tip = O && O.mode === 'match' && ecoVat <= b ? `Phương án <b>Tiết kiệm</b> (${money(ecoVat)} gồm VAT) vừa ngân sách.` : 'Bỏ bớt tính năng ở mục 2 (mỗi mục ghi sẵn giá) hoặc giảm số lượng để vừa ngân sách.';
+  return `<div class="small" style="margin-top:8px">${chip('Vượt ngân sách ' + money(price - b), 'err')} Ngân sách khách ${vnd(b)} <span class="muted">(so với giá đã gồm VAT)</span>. ${tip}</div>`;
+}
+// "10tr", "7,5 triệu", "10.000.000", "500k" → số đồng
+function parseMoney(v) {
+  const t = String(v || '').toLowerCase().replace(/\s+/g, '');
+  if (!t) return null;
+  const unit = /tỷ|ty/.test(t) ? 1e9 : /tr|triệu|trieu/.test(t) ? 1e6 : /k|nghìn|ngàn|ngan/.test(t) ? 1e3 : 1;
+  const n = unit > 1 ? parseFloat(t.replace(/[^\d.,]/g, '').replace(',', '.')) : Number(t.replace(/[^\d]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * unit) : null;
+}
+
 // Bảng đo lường web mẫu (công khai): tiêu chí, số đo, mức (sale chỉnh được), điểm → mức may đo
 function measureTableHtml(Q) {
   const c = Q?.complexity;
@@ -924,7 +952,9 @@ document.addEventListener('change', async (e) => {
       await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: t.dataset.qqty, include: q > 0, quantity: q > 0 ? q : null });
       await reload();
     } else if (t.dataset.qinfo) {
-      await api(`/api/projects/${pid()}`, 'PUT', { [t.dataset.qinfo]: t.value, rev: S.project.project.rev });
+      const val = t.dataset.qinfo === 'budget' ? parseMoney(t.value) : t.value;
+      if (t.dataset.qinfo === 'budget' && t.value.trim() && val == null) { toast('Ngân sách không hợp lệ — ví dụ: 10tr, 7,5 triệu, 10.000.000', true); return; }
+      await api(`/api/projects/${pid()}`, 'PUT', { [t.dataset.qinfo]: val, rev: S.project.project.rev });
       await reload();
     } else if (t.dataset.rq) {
       await api(`/api/requirements/${t.dataset.rq}`, 'PUT', { [t.dataset.k]: t.dataset.k === 'quantity' ? (t.value === '' ? null : Number(t.value)) : t.value });

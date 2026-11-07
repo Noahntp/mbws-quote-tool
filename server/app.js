@@ -220,7 +220,8 @@ app.post('/api/projects/:id/quick-feature', h(async (req, res) => {
       rid = await addRequirement(pid, req.user, { feature, quantity: quantity ?? undefined, decision: 'include' });
     }
     // Nhập số lượng = đã trả lời câu hỏi "bao nhiêu" của mục đó
-    if (feature === 'DESIGN_LEVEL' && quantity != null && rid) await run("UPDATE requirements SET source_kind='client' WHERE id=?", rid);
+    // số do sale/khách nhập → đánh dấu 'client' để lần quét lại không ghi đè
+    if (['DESIGN_LEVEL', 'PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE'].includes(feature) && quantity != null && rid) await run("UPDATE requirements SET source_kind='client' WHERE id=?", rid);
     if (include && quantity != null && rid && ['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE'].includes(feature)) {
       await run("UPDATE questions SET answer=?, status='answered' WHERE requirement_id=? AND status='open' AND blocking=1", `Số lượng: ${quantity} (nhập ở báo giá nhanh)`, rid);
     }
@@ -687,7 +688,7 @@ app.get('/api/projects/:id/quick', h(async (req, res) => {
   const options = await designOptions(pid, b, current);
   const officialNow = Number((await projectState(pid)).preview.price_net ?? 0);
   res.json({
-    options,
+    options, volumes: b.pricing.volumes || null, budget: b.p.budget ?? null,
     baseline: baseline ? { ...baseline, price: base.price, package: base.package, package_name: base.package_name, count: Object.keys(baseline.features || {}).filter((f) => f !== 'DESIGN_LEVEL').length } : null,
     complexity: refreshAssessment(b.pricing.complexity),
     design_level: Number(b.reqs.find((r) => r.feature === 'DESIGN_LEVEL' && r.decision === 'include')?.quantity || 0) || null,
