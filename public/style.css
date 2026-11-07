@@ -70,3 +70,13 @@ label.feat { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; c
 
 .storage-warn { background: #fdecea; color: #8a1c12; border-bottom: 1px solid #f3b5ad; padding: 8px 16px; font-size: 14px; }
 @media (prefers-color-scheme: dark) { .storage-warn { background: #3b1611; color: #ffc9c0; border-color: #6b2a20; } }
+
+/* Đo lường web mẫu & hai phương án giá */
+details.measure { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+details.measure summary { cursor: pointer; }
+table.rubric { margin-top: 6px; } table.rubric td { vertical-align: top; } table.rubric select { max-width: 230px; }
+.opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.opt b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.opt.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.opt:disabled { cursor: default; }

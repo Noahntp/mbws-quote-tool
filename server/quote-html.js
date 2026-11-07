@@ -2,7 +2,22 @@
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const vnd = (n) => (n == null ? '—' : Math.round(Number(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' ₫');
 
-export function renderCustomerQuote(v, { draft, preliminary } = {}) {
+// Cơ sở xác định mức thiết kế (may đo) — bảng tiêu chí công khai, khách tự kiểm chứng được trên web mẫu.
+function measureSection(s, economy) {
+  const c = s.pricing?.complexity;
+  const dl = s.requirements.find((x) => x.feature === 'DESIGN_LEVEL' && x.decision === 'include');
+  if (!c?.rows || !dl) return '';
+  let host = ''; try { host = new URL(c.url).hostname.replace(/^www\./, ''); } catch {}
+  return `<h2>Cơ sở xác định mức thiết kế</h2>
+<p>Mức thiết kế <b>M${esc(dl.quantity)}</b> được xác định theo bảng tiêu chí đo trên web mẫu <b>${esc(host)}</b>${c.at ? ` (đo ngày ${esc(String(c.at).slice(0, 10))})` : ''}. Tính năng và số trang đã tính trong gói nên không cộng lại ở đây.</p>
+<table><thead><tr><th>Tiêu chí</th><th>Cách đo</th><th>Kết quả trên web mẫu</th><th>Mức</th><th style="text-align:right">Điểm</th></tr></thead><tbody>
+${c.rows.map((x) => `<tr><td>${esc(x.title)}</td><td class="muted">${esc(x.how)}</td><td>${esc(x.value)}</td><td>${esc(x.label)}</td><td class="n">${x.pts}</td></tr>`).join('')}
+<tr class="total"><td colspan="4">Tổng điểm → mức thiết kế</td><td class="n">${c.score} → M${esc(dl.quantity)}</td></tr></tbody></table>
+<p class="muted">Thang quy đổi: ${esc(c.scale_text || '')}.</p>
+${economy ? `<p><b>Phương án tiết kiệm:</b> nếu dùng giao diện mẫu dựng sẵn (không làm giống web mẫu) với cùng tính năng — gói ${esc(economy.package || '')}, giá từ <b>${vnd(economy.price)}</b> (trước thuế).</p>` : ''}`;
+}
+
+export function renderCustomerQuote(v, { draft, preliminary, economy } = {}) {
   const s = v.snapshot; const r = v.result; const p = s.project;
   const included = s.requirements.filter((x) => x.decision === 'include');
   const excluded = s.requirements.filter((x) => x.decision === 'exclude');
@@ -53,6 +68,8 @@ ${recurring.length ? `<h2>Phí định kỳ (tính riêng, không gộp vào gi�
 <h2>Phạm vi bàn giao</h2>
 <ul>${included.map((x) => `<li><b>${esc(x.title)}</b>${x.quantity != null ? ` — ${esc(x.quantity)} ${esc(x.unit || '')}` : ''}${x.acceptance ? `<br><span class="muted">Tiêu chí nghiệm thu: ${esc(x.acceptance)}</span>` : ''}</li>`).join('')}</ul>
 ${pkg ? `<p class="muted">Quyền lợi gói ${esc(pkg.code)}: ${(pkg.highlights || []).map(esc).join('; ')}</p>` : ''}
+
+${measureSection(s, economy)}
 
 <h2>Ngoài phạm vi</h2>
 <ul>${excluded.map((x) => `<li>${esc(x.title)}</li>`).join('')}${(s.exclusions_standard || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>

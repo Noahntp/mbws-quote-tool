@@ -285,6 +285,7 @@ function renderQuick() {
       </div>
       <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
         <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
+      ${measureTableHtml(S.quick)}
       <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
     </div>
@@ -325,13 +326,31 @@ const money = (n) => { const a = Math.abs(Number(n) || 0); const s = a >= 1e6 ? 
 const domainLabel = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || 'web mẫu'; } };
 
 const LEVEL_NAME = { 1: 'Tối giản', 2: 'Cơ bản', 3: 'Tiêu chuẩn', 4: 'Mở rộng', 5: 'Nâng cao', 6: 'Phức tạp', 7: 'Chuyên sâu', 8: 'Cao cấp' };
-// Mức may đo theo độ phức tạp web mẫu (quyết định gói tối thiểu); cho phép chỉnh tay
-function complexityHtml(Q) {
-  const c = Q?.complexity; const lv = Q?.design_level || c?.level;
-  if (!c && !lv) return '';
-  return `<div class="small" style="margin-top:6px">Độ phức tạp: <select data-qlevel title="Mức may đo quyết định gói tối thiểu">${[1, 2, 3, 4, 5, 6, 7, 8].map((m) => `<option value="${m}" ${m === lv ? 'selected' : ''}>M${m} – ${LEVEL_NAME[m]}${c && m === c.level ? ' (đánh giá)' : ''}</option>`).join('')}</select>
-    ${c ? `<span class="muted">${c.score}/${c.max} điểm</span><div class="muted">${esc(c.reasons.join(' · '))}</div>` : ''}</div>
-    ${c?.enterprise && lv === c.level ? `<p class="checks" style="margin:6px 0 0"><span class="warn">⚠️ Quy mô vượt gói HERO 8 — matbao.ws xếp loại <b>Enterprise, báo giá riêng</b>. Giá trên là mức tối thiểu.</span></p>` : ''}`;
+// Bảng đo lường web mẫu (công khai): tiêu chí, số đo, mức (sale chỉnh được), điểm → mức may đo
+function measureTableHtml(Q) {
+  const c = Q?.complexity;
+  if (!c) return '';
+  if (!c.rows) return `<p class="small muted" style="margin:8px 0 0">Web mẫu được đo theo cách cũ (M${esc(c.level)}). Bấm <b>Quét lại</b> để đo theo bảng tiêu chí mới, minh bạch hơn.</p>`;
+  const R = Object.fromEntries((S.meta.measure_rubric || []).map((r) => [r.key, r]));
+  const edit = can('requirement.decide');
+  const row = (x) => `<tr><td><b>${esc(x.title)}</b><div class="small muted">${esc(x.how)}</div></td><td>${esc(x.value)}</td>
+    <td><select data-measure="${x.key}" ${edit ? '' : 'disabled'} title="Chỉnh khi số đo chưa chuẩn (vd. sitemap không đọc được)">${(R[x.key]?.bands || []).map((b, i) => `<option value="${i}" ${i === x.band ? 'selected' : ''}>${esc(b.label)}${i === x.auto_band ? ' · số đo' : ''}</option>`).join('')}</select>${x.overridden ? ` ${chip('✎ sale chỉnh', 'warn')}` : ''}</td>
+    <td class="n">${x.pts}</td></tr>`;
+  return `<details class="measure" open><summary><b>Đo lường web mẫu</b> — ${c.score}/${c.max} điểm → <b>M${c.level} · ${esc(c.name)}</b>${c.enterprise ? ' · Enterprise' : ''}</summary>
+    <div class="tablewrap"><table class="rubric"><thead><tr><th>Tiêu chí</th><th>Đo được trên web mẫu</th><th>Mức</th><th class="n">Điểm</th></tr></thead><tbody>${c.rows.map(row).join('')}</tbody></table></div>
+    <p class="small muted" style="margin:6px 0 0">Thang: ${esc(c.scale_text || '')}. Tính năng, số trang, số sản phẩm đã tính trong gói — <b>không cộng lại</b> vào điểm này. Bảng này in kèm báo giá gửi khách.</p></details>`;
+}
+// Hai phương án cho khách chọn: làm giống web mẫu (theo mức đo) hoặc tiết kiệm (giao diện mẫu dựng sẵn, đủ tính năng)
+function optionsHtml(Q) {
+  const O = Q?.options; const c = Q?.complexity;
+  if (!O) return '';
+  const edit = can('requirement.decide');
+  const card = (mode, title, sub, o) => `<button class="opt ${O.mode === mode ? 'on' : ''}" data-act="designMode" data-mode="${mode}" ${edit ? '' : 'disabled'}>
+    <span class="small">${O.mode === mode ? '● ' : '○ '}${title}</span><b>${money(o.price)}</b><span class="small muted">${esc(sub)}${o.package ? ' · ' + esc(o.package) : ''}</span></button>`;
+  const diff = O.match.price - O.economy.price;
+  return `<div class="opts">${card('match', 'Giống web mẫu', `giao diện M${O.level}`, O.match)}${card('economy', 'Tiết kiệm', 'giao diện mẫu dựng sẵn', O.economy)}</div>
+    <div class="small muted" style="margin-top:4px">${diff > 0 ? `Chênh ${money(diff)} là phần làm giao diện giống web mẫu (mức M${O.level}, xem bảng đo lường ở mục 1).` : 'Hai phương án cùng giá: web mẫu không đòi hỏi giao diện cao hơn gói theo tính năng.'}</div>
+    ${c?.enterprise && O.mode === 'match' ? `<p class="checks" style="margin:6px 0 0"><span class="warn">⚠️ Quy mô vượt gói HERO 8 — matbao.ws xếp loại <b>Enterprise, báo giá riêng</b>. Giá trên là mức tối thiểu.</span></p>` : ''}`;
 }
 
 // ① Giá sơ bộ cho web giống web mẫu → ② Phát sinh theo tính năng chọn thêm → Tổng
@@ -356,7 +375,7 @@ function priceStepsHtml(P, r, pkg, running) {
     <div class="step"><div class="small muted">① Web giống <b>${esc(domainLabel(b.domain))}</b> — đánh giá sơ bộ</div>
       <div class="big2">${vnd(b.price)}</div>
       <div class="small muted">Gói ${esc(b.package || '')}${b.package_name ? ' – ' + esc(b.package_name) : ''} · ${b.count} tính năng thấy trên web mẫu</div>
-      ${complexityHtml(Q)}</div>
+      ${optionsHtml(Q)}</div>
     <div class="step"><div class="small muted">② Phát sinh theo tính năng chọn thêm</div>
       <div class="big2" style="color:${Q.extra > 0 ? 'var(--accent)' : 'inherit'}">${Q.extra >= 0 ? '+' : '−'} ${vnd(Math.abs(Q.extra))}</div>
       ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : '<div class="small muted">Chưa chọn thêm — tick ở mục 2, mỗi mục ghi sẵn giá cộng thêm.</div>'}
@@ -804,6 +823,7 @@ const ACT = {
     S.briefSug = null; toast(`Đã thêm ${items.length} yêu cầu`); location.hash = `#/p/${pid()}/reqs`;
   }),
   addRef: run(async () => { const r = await api(`/api/projects/${pid()}/refs`, 'POST', { url: val('newRef') }); toast(r.survey_run_id ? 'Đã thêm và bắt đầu khảo sát web này' : 'Đã thêm web tham khảo'); clearFields('newRef'); reload(); }),
+  designMode: run(async (el) => { await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: el.dataset.mode === 'match' }); await reload(); }),
   rescan: run(async (el) => { await api(`/api/projects/${pid()}/survey`, 'POST', { ref_id: Number(el.dataset.id) }); toast('Đang quét lại web mẫu (1–4 phút)'); reload(); }),
   surveyAll: run(async () => { const r = await api(`/api/projects/${pid()}/survey-all`, 'POST', {}); toast(`Đã bắt đầu khảo sát ${r.queued} web`); reload(); }),
   bulkDecide: run(async (el) => {
@@ -890,7 +910,10 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('change', async (e) => {
   const t = e.target;
   try {
-    if ('qlevel' in t.dataset) {
+    if (t.dataset.measure) {
+      await api(`/api/projects/${pid()}/measure`, 'POST', { key: t.dataset.measure, band: Number(t.value) });
+      await reload();
+    } else if ('qlevel' in t.dataset) {
       await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: true, quantity: Number(t.value) });
       await reload();
     } else if (t.dataset.qfeat) {

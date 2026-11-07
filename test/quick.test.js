@@ -53,15 +53,15 @@ test('giá sơ bộ theo web mẫu, rồi phát sinh khi chọn thêm', async ()
   assert.deepEqual(Object.keys(q.baseline.features).sort(), ['BOOKING', 'CHAT_ZALO', 'PAGES']); // tích điểm (suy luận) không vào giá gốc
   assert.ok(q.baseline.price > 0 && q.baseline.package, 'phải có giá sơ bộ và gói đề xuất');
   assert.equal(q.extra, 0);
-  const addLogin = q.marginal.MEMBER_LOGIN.delta;
+  const addLogin = q.marginal.LOYALTY.delta;
   assert.ok(addLogin > 0, 'mục chưa chọn phải ghi giá cộng thêm');
   assert.equal(q.marginal.CHAT_ZALO.delta, 0); // bỏ Zalo không đổi giá (gói nào cũng có)
 
-  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'MEMBER_LOGIN', include: true });
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'LOYALTY', include: true });
   q = (await api(`/api/projects/${id}/quick`)).json;
   assert.equal(q.extra, q.current.price - q.baseline.price);
   assert.equal(q.extra, addLogin); // phát sinh đúng bằng giá cộng thêm đã báo trước khi tick
-  assert.deepEqual(q.changes.map((c) => c.kind + ':' + c.code), ['added:MEMBER_LOGIN']);
+  assert.deepEqual(q.changes.map((c) => c.kind + ':' + c.code), ['added:LOYALTY']);
 
   await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'BOOKING', include: false });
   q = (await api(`/api/projects/${id}/quick`)).json;
@@ -99,4 +99,48 @@ test('dung lượng hosting vượt gói → cộng phí mua thêm GB (giá theo
   const ad = (after.addons || []).find((a) => a.code === 'ADD_HOSTING_1GB');
   assert.ok(ad && ad.qty > 0, 'phải có add-on hosting');
   assert.ok(Number(after.price_net) > Number(before.price_net));
+});
+
+test('đo lường minh bạch: bảng tiêu chí, sale chỉnh được, hai phương án giá, in kèm báo giá', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['web-lon.vn'] });
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId);
+  await ingest({ id: runId, project_id: id, url: 'https://web-lon.vn/' }, {
+    ok: true, input: 'https://web-lon.vn/', sitemap: { status: 'not_found' }, coverage: { discovered: 197 },
+    templates: [{ template: 'home', kind: 'home', url_count: 1 }],
+    metrics: { pages: 3, max_elements: 2388, max_nav_links: 27, max_languages: 0, framework: 'Next.js' },
+    pages: [{ url: 'https://web-lon.vn/', template: 'home', captured_at: new Date().toISOString(), features: [
+      { feature: 'CART', detail: 'Nút thêm vào giỏ', verification: 'observed' }, { feature: 'SEARCH', detail: 'Ô tìm kiếm', verification: 'observed' }] }],
+  });
+  let q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.complexity.rows.length, 5);
+  assert.equal(q.complexity.level, 4); // 197 trang (không đọc được sitemap) + Next.js + giao diện vừa
+  assert.equal(q.options.mode, 'match');
+  assert.ok(q.options.economy.price < q.options.match.price, 'phương án tiết kiệm phải rẻ hơn');
+  const base0 = q.baseline.price;
+
+  // sale chỉnh quy mô (sitemap không đọc được, thực tế ~20.000 trang) → mức tăng, giá gốc theo mức mới (không tính là phát sinh)
+  assert.equal((await api(`/api/projects/${id}/measure`, 'POST', { key: 'scale', band: 99 })).status, 400);
+  assert.equal((await api(`/api/projects/${id}/measure`, 'POST', { key: 'scale', band: 4 })).status, 200);
+  q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.complexity.level, 6);
+  assert.equal(q.complexity.rows[0].overridden, true);
+  assert.ok(q.baseline.price > base0);
+  assert.equal(q.extra, 0);
+  // quay về số đo tự động
+  await api(`/api/projects/${id}/measure`, 'POST', { key: 'scale', band: null });
+  assert.equal((await api(`/api/projects/${id}/quick`)).json.complexity.level, 4);
+
+  // khách chọn "Tiết kiệm" → giá hiện tại = giá phương án tiết kiệm; quét lại không tự bật lại
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: false });
+  q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.options.mode, 'economy');
+  assert.equal(q.current.price, q.options.economy.price);
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: true });
+
+  // báo giá sơ bộ gửi khách có bảng đo lường + phương án tiết kiệm
+  const html = await (await fetch(base + `/quote/project/${id}`, { headers: { 'x-user-id': '1' } })).text();
+  assert.match(html, /Cơ sở xác định mức thiết kế/);
+  assert.match(html, /Quy mô web/);
+  assert.match(html, /Phương án tiết kiệm/);
 });

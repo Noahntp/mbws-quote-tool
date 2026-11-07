@@ -8,7 +8,7 @@ import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureBy
 import { normalizeDomain, domainOf } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
-import { refreshAssessment } from './complexity.js';
+import { refreshAssessment, assessComplexity, RUBRIC } from './complexity.js';
 import { mountAuth } from './auth.js';
 import { captureBaseline, enqueueRun, kickQueue } from './jobs.js';
 
@@ -73,6 +73,7 @@ app.get('/api/meta', h(async (req, res) => {
     settings: (await all('SELECT s.*, u.name approved_by_name FROM settings_versions s LEFT JOIN users u ON u.id=s.approved_by ORDER BY kind, effective_from DESC, id DESC')).map(parseSetting),
     perms: Object.fromEntries(Object.entries(PERMS).map(([k, roles]) => [k, roles.includes(req.user.role)])),
     storage: { persistent: PERSISTENT, driver: DRIVER },
+    measure_rubric: RUBRIC.map((r) => ({ key: r.key, title: r.title, how: r.how, bands: r.bands.map((b) => ({ label: b.label, pts: b.pts })) })),
   });
 }));
 const parseSetting = (s) => (s ? { ...s, data: JSON.parse(s.data_json), data_json: undefined } : null);
@@ -602,6 +603,50 @@ async function simulatePrice(pid, b, reqs, { autoPackage = false } = {}) {
   return { price: Number(r.price_net ?? 0), package: code, package_name: pkg?.name || null, ok: r.ok !== false };
 }
 
+// Hai phương án để sale đưa khách chọn (tránh bị cho là ép giá):
+//  - "Giống web mẫu": giữ mức may đo theo bảng đo lường;  - "Tiết kiệm": đủ tính năng, giao diện mẫu dựng sẵn (bỏ mức may đo).
+async function designOptions(pid, b, current) {
+  const cx = refreshAssessment(b.pricing.complexity);
+  const dl = current.find((r) => r.feature === 'DESIGN_LEVEL');
+  if (!cx || !dl) return null;
+  const level = Number(dl.quantity || cx.level);
+  const set = (decision) => current.map((r) => (r.feature === 'DESIGN_LEVEL' ? { ...r, decision, quantity: level } : r));
+  const m = await simulatePrice(pid, b, set('include'), { autoPackage: true });
+  const e = await simulatePrice(pid, b, set('exclude'), { autoPackage: true });
+  return { mode: dl.decision === 'include' ? 'match' : 'economy', level, match: { price: m.price, package: m.package, package_name: m.package_name }, economy: { price: e.price, package: e.package, package_name: e.package_name } };
+}
+
+// Sale chỉnh một tiêu chí đo lường (vd. sitemap không đọc được → chọn đúng quy mô). band=null → quay về số đo tự động.
+app.post('/api/projects/:id/measure', h(async (req, res) => {
+  need(req, 'requirement.decide');
+  const pid = Number(req.params.id);
+  const rub = RUBRIC.find((r) => r.key === req.body.key);
+  if (!rub) throw new HttpError(400, 'Tiêu chí không hợp lệ');
+  const band = req.body.band === null || req.body.band === '' || req.body.band === undefined ? null : Number(req.body.band);
+  if (band !== null && !(Number.isInteger(band) && band >= 0 && band < rub.bands.length)) throw new HttpError(400, 'Mức không hợp lệ');
+  let out;
+  await tx(async () => {
+    const p = await projectOr404(pid, 'pricing_json');
+    const pricing = JSON.parse(p.pricing_json || '{}');
+    const c = pricing.complexity;
+    if (!c?.measured) throw new HttpError(409, 'Hồ sơ đo theo cách cũ — bấm "Quét lại" để đo theo bảng tiêu chí mới.');
+    const overrides = { ...(c.overrides || {}) };
+    const before = overrides[rub.key] ?? null;
+    if (band === null || band === assessComplexity(c.measured, {}).rows.find((r) => r.key === rub.key).auto_band) delete overrides[rub.key];
+    else overrides[rub.key] = band;
+    const a = assessComplexity(c.measured, overrides);
+    pricing.complexity = { ...c, ...a, overrides };
+    // chỉnh số đo là sửa ĐÁNH GIÁ web mẫu, không phải phát sinh → giá gốc theo mức mới
+    if (pricing.baseline?.features && 'DESIGN_LEVEL' in pricing.baseline.features && !pricing.baseline.manual) pricing.baseline.features.DESIGN_LEVEL = a.level;
+    await run("UPDATE projects SET pricing_json=?, rev=rev+1, updated_at=datetime('now') WHERE id=?", JSON.stringify(pricing), pid);
+    const dl = await one("SELECT * FROM requirements WHERE project_id=? AND feature='DESIGN_LEVEL'", pid);
+    if (dl) await run("UPDATE requirements SET quantity=?, source_kind='inferred', updated_at=datetime('now') WHERE id=?", a.level, dl.id);
+    await audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'measure_override', before: { [rub.key]: before }, after: { [rub.key]: overrides[rub.key] ?? null, level: a.level, score: a.score } });
+    out = { level: a.level, score: a.score };
+  });
+  res.json({ ok: true, ...out });
+}));
+
 const QTY_FEATURES = new Set(['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE', 'DESIGN_LEVEL']);
 app.get('/api/projects/:id/quick', h(async (req, res) => {
   const pid = Number(req.params.id);
@@ -639,8 +684,10 @@ app.get('/api/projects/:id/quick', h(async (req, res) => {
     const sim = await simulatePrice(pid, b, alt);
     marginal[f.code] = { delta: sim.price - cur.price, package: sim.package };
   }
+  const options = await designOptions(pid, b, current);
   const officialNow = Number((await projectState(pid)).preview.price_net ?? 0);
   res.json({
+    options,
     baseline: baseline ? { ...baseline, price: base.price, package: base.package, package_name: base.package_name, count: Object.keys(baseline.features || {}).filter((f) => f !== 'DESIGN_LEVEL').length } : null,
     complexity: refreshAssessment(b.pricing.complexity),
     design_level: Number(b.reqs.find((r) => r.feature === 'DESIGN_LEVEL' && r.decision === 'include')?.quantity || 0) || null,
@@ -748,10 +795,11 @@ app.get('/quote/project/:pid', h(async (req, res) => {
   const v = {
     quote_code: `BG-${b.p.code}`, version: 'sơ bộ', created_at: new Date().toISOString().slice(0, 10),
     valid_until: new Date(Date.now() + validDays * 86400000).toISOString().slice(0, 10), payment_terms: b.pricing.payment_terms || '',
-    snapshot: { project: b.p, input: b.input, requirements: b.reqs, exclusions_standard: catalog().standard_exclusions }, result: r,
+    snapshot: { project: b.p, pricing: b.pricing, input: b.input, requirements: b.reqs, exclusions_standard: catalog().standard_exclusions }, result: r,
   };
+  const opt = await designOptions(pid, b, b.reqs.map((x) => ({ ...x })));
   await audit({ project_id: pid, entity: 'quick_quote', entity_id: pid, action: 'print', after: { price_net: r.price_net, package: b.input.package?.code } });
-  res.type('html').send(renderCustomerQuote(v, { preliminary: true }));
+  res.type('html').send(renderCustomerQuote(v, { preliminary: true, economy: opt && opt.mode === 'match' && opt.economy.price < opt.match.price ? opt.economy : null }));
 }));
 
 app.get('/quote/:id', h(async (req, res) => {

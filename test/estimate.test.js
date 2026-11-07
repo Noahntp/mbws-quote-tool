@@ -25,7 +25,7 @@ test('mỗi tính năng nằm đúng cấp gói theo matbao.ws', () => {
   assert.equal(at('BLOG'), 'ZERO 2');
   assert.equal(at('MULTILANG'), 'HERO 1');
   assert.equal(at('BOOKING'), 'HERO 3');
-  assert.equal(at('MEMBER_LOGIN'), 'HERO 4');
+  assert.equal(at('MEMBER_LOGIN'), 'ZERO 2'); // tài khoản khách mua hàng đi kèm giỏ hàng; tích điểm/hạng (LOYALTY) mới cần HERO 4
   assert.equal(at('LOYALTY'), 'HERO 4');
   assert.equal(at('OMNI_CONTENT'), 'HERO 5');
   assert.equal(at('AI_ASSISTANT'), 'HERO 6');
@@ -63,4 +63,14 @@ test('dung lượng hosting: gói gồm sẵn GB, vượt thì mua thêm theo GB
   const reqs = [{ id: 1, code: 'R1', feature: 'HOSTING_STORAGE', quantity: 3, decision: 'include' }];
   const ap = applyPackage(catalog, pk, findPackage(pk, 'ZERO 1'), [], reqs);
   assert.deepEqual(ap.addons.map((a) => [a.code, a.qty]), [['ADD_HOSTING_1GB', 3]]);
+});
+
+test('mẫu trang vượt sức chứa: mua thêm ít theo đơn giá mẫu của gói; vượt nhiều phải lên gói lớn hơn', () => {
+  const pg = feature('PAGES');
+  const z6 = coverage(catalog, packages, findPackage(packages, 'ZERO 6'), pg, 8); // S3 ~7 mẫu, cần 8
+  assert.equal(z6.status, 'capacity');
+  assert.deepEqual(z6.addons.map((a) => [a.code, a.qty, a.unit_price]), [['ADD_TEMPLATE', 1, 600000]]); // 4 tr ÷ 7 ≈ 600k, không phải ~4,7 tr giờ công
+  const z2 = coverage(catalog, packages, findPackage(packages, 'ZERO 2'), pg, 8); // S1 ~4 mẫu, cần 8 → không được "mua lẻ" thay gói
+  assert.equal(z2.status, 'not_included'); assert.equal(z2.hard, true);
+  assert.equal(coverage(catalog, packages, findPackage(packages, 'HERO 8'), pg, 30).status, 'capacity'); // vượt cả gói lớn nhất → vẫn mua thêm được
 });

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { waitUntil } from '@vercel/functions';
 import { one, all, run, tx, audit, DATA_DIR, ROOT, loadJson, IS_SERVERLESS } from './db.js';
-import { assessComplexity } from './complexity.js';
+import { assessComplexity, measureFromScan } from './complexity.js';
 
 const MAX_ATTEMPTS = 2;
 const BUDGET_MS = Number(process.env.CRAWLER_BUDGET_MS || (IS_SERVERLESS ? 190000 : 240000));
@@ -178,7 +178,9 @@ export async function ingest(job, res) {
     const tpl = res.templates || [];
     // nhóm URL "phẳng" (không có chữ san-pham trong đường dẫn) nhưng nội dung là trang sản phẩm → coi là chi tiết sản phẩm
     const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : t.kind === 'other' ? 'other' : t.template);
-    const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart'].includes(t.kind)).map(tplKey));
+    // trang lẻ không rõ loại (nhóm "other" chỉ 1 URL) dùng chung mẫu trang nội dung → không tính thành mẫu trang riêng
+    const oneOff = (t) => t.kind === 'other' && !t.detected && (t.url_count || 0) < 2;
+    const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart'].includes(t.kind) && !oneOff(t)).map(tplKey));
     const quantities = {};
     if (distinct.size) {
       const code = await addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${distinct.size} nhóm mẫu trang: ${[...distinct].join(', ')} (từ ${res.coverage?.discovered ?? 0} URL phát hiện)`, verification: 'inferred' });
@@ -200,12 +202,15 @@ export async function ingest(job, res) {
     }
 
     // Độ phức tạp web mẫu → mức may đo M1–M8 (quyết định gói tối thiểu và vị trí giá trong khoảng của gói)
+    // Chỉ dùng bảng tiêu chí công khai (quy mô, độ dày giao diện, menu, ngôn ngữ, nền tảng) — tính năng đã tính qua gói, không cộng lại.
     let complexity = null;
     if (res.metrics) {
-      const observed = new Set(Object.entries(featureEv).filter(([, e]) => e.best === 'observed').map(([k]) => k));
-      complexity = assessComplexity({ discovered: res.coverage?.discovered || 0, estimatedUrls: res.coverage?.estimated_urls || 0, templateGroups: res.coverage?.template_groups || 0, observed, metrics: res.metrics, productCount: res.sitemap?.product_urls || 0 });
+      const measured = measureFromScan(res);
+      const prevPricing = JSON.parse((await one('SELECT pricing_json FROM projects WHERE id=?', job.project_id))?.pricing_json || '{}');
+      const overrides = prevPricing.complexity?.overrides || {}; // giữ phần sale đã chỉnh qua các lần quét lại
+      complexity = { ...assessComplexity(measured, overrides), measured, overrides };
       const code = await addEv({ url: res.input, kind: 'complexity', feature: 'DESIGN_LEVEL', verification: 'inferred',
-        detail: `Độ phức tạp ${complexity.score}/${complexity.max} → may đo M${complexity.level} ${complexity.name}${complexity.enterprise ? ' (vượt quy mô HERO 8 — Enterprise)' : ''}: ${complexity.reasons.join('; ')}` });
+        detail: `Đo lường ${complexity.score}/${complexity.max} điểm → may đo M${complexity.level} ${complexity.name}${complexity.enterprise ? ' (vượt quy mô HERO 8 — Enterprise)' : ''}: ${complexity.rows.map((r) => `${r.title} ${r.value} → ${r.pts}đ`).join('; ')}` });
       featureEv.DESIGN_LEVEL = { codes: [code], best: 'inferred' };
       quantities.DESIGN_LEVEL = complexity.level;
     }
@@ -219,7 +224,8 @@ export async function ingest(job, res) {
         const codes = [...new Set([...JSON.parse(existing.evidence_codes), ...ev.codes])];
         await run("UPDATE requirements SET evidence_codes=?, updated_at=datetime('now') WHERE id=?", JSON.stringify(codes), existing.id);
         // quét lại: mức may đo theo đánh giá mới, trừ khi người dùng đã tự chỉnh
-        if (feature === 'DESIGN_LEVEL' && existing.source_kind !== 'client') await run("UPDATE requirements SET quantity=?, decision='include' WHERE id=?", quantities.DESIGN_LEVEL, existing.id);
+        // (giữ lựa chọn "Tiết kiệm" = đã bỏ mức may đo; chỉ bật lại nếu đang chờ quyết định)
+        if (feature === 'DESIGN_LEVEL' && existing.source_kind !== 'client') await run('UPDATE requirements SET quantity=?, decision=? WHERE id=?', quantities.DESIGN_LEVEL, existing.decision === 'pending' ? 'include' : existing.decision, existing.id);
         continue;
       }
       const code = await nextCode('requirements', job.project_id, 'R');

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assessComplexity } from '../server/complexity.js';
+import { assessComplexity, measureFromScan } from '../server/complexity.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = fs.mkdtempSync(path.join(os.tmpdir(), 'mbws-metrics-'));
@@ -27,7 +27,7 @@ let next = 0;
 await Promise.all(Array.from({ length: CONC }, async () => { while (next < urls.length) { const i = next++; results[i] = await scan(urls[i], i); } }));
 for (const [i, r] of results.entries()) {
   const feats = new Set((r.pages || []).filter((p) => !p.error).flatMap((p) => (p.features || []).filter((f) => f.verification === 'observed').map((f) => f.feature)));
-  const a = assessComplexity({ discovered: r.coverage?.discovered || 0, estimatedUrls: r.coverage?.estimated_urls || 0, templateGroups: r.coverage?.template_groups || 0, observed: feats, metrics: r.metrics || {}, productCount: r.sitemap?.product_urls || 0 });
+  const a = assessComplexity(measureFromScan(r));
   console.log(`\n${urls[i]}  ok=${r.ok} ${r.fatal || ''}`);
   console.log(`  URL ${r.coverage?.discovered} | nhóm ${r.coverage?.template_groups} | SP sitemap ${r.sitemap?.product_urls || 0} | tính năng: ${[...feats].join(',')}`);
   console.log(`  chỉ số: ${JSON.stringify(r.metrics)}`);

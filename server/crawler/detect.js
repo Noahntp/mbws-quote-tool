@@ -167,7 +167,9 @@ export function detectInPage() {
   // ---------- Độ phức tạp giao diện (để đánh giá mức may đo M1–M8) ----------
   const allEls = document.getElementsByTagName('*');
   const navLinks = qa('header a[href], nav a[href], [class*="menu" i] a[href], [class*="header" i] a[href]').length;
-  const carousels = qa('[class*="swiper" i], [class*="slick" i], [class*="carousel" i], [class*="owl-" i], [class*="splide" i], [class*="slider" i]').filter((e) => isReal(e) && !e.closest('[class*="swiper" i] [class*="swiper" i]')).length;
+  // Chỉ đếm khung slider ngoài cùng (không đếm từng slide / nút / chấm phân trang bên trong — trước đây 1 slider bị đếm thành hàng chục)
+  const CAROUSEL = '[class*="swiper" i], [class*="slick" i], [class*="carousel" i], [class*="owl-" i], [class*="splide" i], [class*="slider" i]';
+  const carousels = qa(CAROUSEL).filter((e) => isReal(e) && !e.parentElement?.closest(CAROUSEL)).length;
   let animated = 0;
   for (let i = 0, n = Math.min(allEls.length, 2500); i < n; i++) { const cs = getComputedStyle(allEls[i]); if ((cs.animationName && cs.animationName !== 'none') || (cs.transitionDuration && cs.transitionDuration !== '0s')) animated++; }
   const framework = window.__NEXT_DATA__ || document.getElementById('__next') || scriptSrcs.some((s) => s.includes('/_next/')) || self.__next_f ? 'Next.js' : window.__NUXT__ || document.getElementById('__nuxt') ? 'Nuxt' : document.querySelector('[ng-version]') ? 'Angular' : document.querySelector('[data-reactroot], #root > div') && scriptSrcs.some((s) => /react|chunk|bundle/.test(s)) ? 'React' : document.querySelector('[data-v-app], #app[data-v-]') ? 'Vue' : null;

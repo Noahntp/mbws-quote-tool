@@ -96,7 +96,17 @@ export function coverage(catalog, packagesData, ctx, feature, qty) {
   if (feature.capacity === 'sitemap') {
     const lv = levelOf(criterionValue(ctx, 'Bố cục trang web'));
     const cap = catalog.sitemap_capacity[String(lv)] ?? 0;
-    return qty <= cap ? { status: 'included', capacity: cap, note: `Sitemap S${lv} (~${cap} mẫu trang)` } : { status: 'capacity', capacity: cap, over: qty - cap, note: `Sitemap S${lv} ~${cap} mẫu trang, vượt ${qty - cap}` };
+    if (qty <= cap) return { status: 'included', capacity: cap, note: `Sitemap S${lv} (~${cap} mẫu trang)` };
+    // Vượt sức chứa: mỗi mẫu trang thêm tính theo đơn giá mẫu trang CỦA CHÍNH GÓI (giá gói ÷ số mẫu trang) — dễ giải thích,
+    // không bao giờ để 1 mẫu trang đắt hơn cả gói (trước đây tính theo giờ công đầy đủ ~4,7 tr/mẫu).
+    const over = qty - cap;
+    // Chỉ cho mua thêm ít (≈25% sức chứa, tối thiểu 1); vượt nhiều hơn phải lên gói lớn hơn (như matbao.ws bán theo cấp sitemap)
+    const allowed = Math.max(1, Math.round(cap * 0.25));
+    const maxCap = Math.max(0, ...packageList(packagesData).map((c) => catalog.sitemap_capacity[String(levelOf(criterionValue(c, 'Bố cục trang web')))] ?? 0));
+    if (over > allowed && qty <= maxCap) return { status: 'not_included', hard: true, capacity: cap, note: `Sitemap S${lv} ~${cap} mẫu trang, cần ${qty} — vượt quá nhiều, cần gói lớn hơn` };
+    const unit = Math.max(100000, Math.round(ctx.pkg.price.min / Math.max(cap, 1) / 100000) * 100000);
+    return { status: 'capacity', capacity: cap, over, addons: [{ code: 'ADD_TEMPLATE', name: `Thêm mẫu trang ngoài sức chứa gói ${ctx.pkg.code}`, qty: over, unit_price: unit, recurring: null }],
+      note: `Sitemap S${lv} ~${cap} mẫu trang, vượt ${over} → ${over} × ${unit.toLocaleString('vi-VN')} ₫ (giá gói ÷ ${cap} mẫu trang)` };
   }
   if (feature.capacity === 'hosting') {
     // Gói ZERO/HERO 1–5 ghi rõ GB; HERO 6–8 "Theo dự án" → tính như mức cao nhất có niêm yết, phần vượt mua thêm
@@ -151,10 +161,8 @@ export function applyPackage(catalog, packagesData, ctx, lines, requirements) {
       for (const a of cov[l.feature + ':' + l.requirement_id].addons || []) addons.push({ ...a, reason: `${r?.code || ''} ${f.title}` });
     }
     const c = cov[l.feature + ':' + l.requirement_id];
-    if (c.status === 'capacity' && f.capacity === 'sitemap') {
-      const inQty = Math.min(l.qty, c.capacity);
-      if (inQty > 0) out.push({ ...l, qty: inQty, billing: 'package', coverage_note: c.note });
-      if (l.qty - inQty > 0) out.push({ ...l, qty: l.qty - inQty, billing: 'extra', coverage_note: `Vượt sức chứa gói: ${c.note}` });
+    if (c.status === 'capacity' && f.capacity === 'sitemap') { // phần vượt đã tính bằng add-on theo đơn giá mẫu trang của gói
+      out.push({ ...l, billing: 'package', coverage_note: `Vượt sức chứa gói: ${c.note}` });
       continue;
     }
     out.push({ ...l, billing: c.status === 'not_included' ? 'extra' : 'package', coverage_note: c.note });
