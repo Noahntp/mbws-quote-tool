@@ -1,24 +1,15 @@
 {
   "version": 2,
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.js"
-    },
-    {
-      "source": "/quote/(.*)",
-      "destination": "/api/index.js"
-    },
-    {
-      "source": "/storage/(.*)",
-      "destination": "/api/index.js"
-    }
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/quote/(.*)", "destination": "/api" },
+    { "source": "/storage/(.*)", "destination": "/api" },
+    { "source": "/auth/(.*)", "destination": "/api" }
   ],
   "functions": {
     "api/index.js": {
-      "includeFiles": "data/**",
-      "maxDuration": 60
+      "includeFiles": "{data/**,server/**,node_modules/@sparticuz/chromium/bin/**}",
+      "maxDuration": 300
     }
   }
 }
-

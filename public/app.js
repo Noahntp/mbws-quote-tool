@@ -11,6 +11,7 @@ function toast(msg, err) { const d = document.createElement('div'); d.textConten
 async function api(url, method = 'GET', body) {
   const r = await fetch(url, { method, headers: { 'content-type': 'application/json', 'x-user-id': String(S.me?.id || '') }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && j.code === 'LOGIN_REQUIRED') { boot(); throw new Error('Phiên đăng nhập đã hết, vui lòng đăng nhập lại.'); }
   if (!r.ok) { const extra = j.checks ? ': ' + j.checks.map((c) => c.message).join(' | ') : ''; throw new Error((j.error || r.statusText) + extra); }
   return j;
 }
@@ -23,7 +24,25 @@ const VSTATUS = { draft: 'Nháp', pending: 'Chờ duyệt', approved: 'Đã duy�
 const chip = (text, cls = '') => `<span class="chip ${cls}">${esc(text)}</span>`;
 
 // ---------- khởi động ----------
+// Đăng nhập (khi máy chủ đặt APP_PASSWORD)
+async function ensureLogin() {
+  const st = await fetch('/auth/status').then((r) => r.json()).catch(() => ({ required: false, ok: true }));
+  if (!st.required || st.ok) return true;
+  $app.innerHTML = `<div class="panel" style="max-width:380px;margin:60px auto">
+    <h1>Báo giá website</h1><p class="muted">Nhập mật khẩu của nhóm để vào công cụ.</p>
+    <form id="loginForm"><input id="loginPw" type="password" placeholder="Mật khẩu" autocomplete="current-password" style="width:100%;padding:10px;font-size:16px" autofocus>
+    <p><button class="primary" style="width:100%;padding:10px">Đăng nhập</button></p><p id="loginErr" class="checks"></p></form></div>`;
+  document.getElementById('loginForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await fetch('/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('loginPw').value }) });
+    if (r.ok) { boot(); return; }
+    document.getElementById('loginErr').innerHTML = `<span class="error">${esc((await r.json().catch(() => ({}))).error || 'Không đăng nhập được')}</span>`;
+  };
+  return false;
+}
+
 async function boot() {
+  if (!(await ensureLogin())) return;
   S.users = await fetch('/api/users').then((r) => r.json());
   const saved = Number(localStorageGet('uid')) || S.users[0]?.id;
   S.me = S.users.find((u) => u.id === saved) || S.users[0];

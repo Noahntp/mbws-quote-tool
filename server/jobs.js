@@ -50,13 +50,17 @@ export async function processNext() {
   if (!claimed.changes) return false; // tiến trình khác đã nhận
   await run("UPDATE analysis_runs SET status='running', started_at=datetime('now'), attempts=attempts+1, locked_at=datetime('now') WHERE id=?", job.run_id);
   busy = true;
+  const t0 = Date.now();
   try {
     const r = await one('SELECT * FROM analysis_runs WHERE id=?', job.run_id);
+    console.log(`[quét] bắt đầu #${r.id} ${r.url}`);
     const result = await executeRun(r);
+    console.log(`[quét] xong #${r.id}: ${result.ok ? 'ok' : 'lỗi ' + (result.fatal || '')}, ${(result.pages || []).length} trang, ${Math.round((Date.now() - t0) / 1000)}s`);
     await ingest(r, result);
     const st = (await one('SELECT status FROM analysis_runs WHERE id=?', job.run_id))?.status;
     await run('UPDATE job_queue SET status=?, locked_at=NULL WHERE run_id=?', st === 'failed' ? 'failed' : 'done', job.run_id);
   } catch (e) {
+    console.error(`[quét] lỗi #${job.run_id} sau ${Math.round((Date.now() - t0) / 1000)}s:`, e.message);
     const q = await one('SELECT attempts FROM job_queue WHERE run_id=?', job.run_id);
     const retry = (q?.attempts ?? MAX_ATTEMPTS) < MAX_ATTEMPTS;
     await run('UPDATE job_queue SET status=?, locked_at=NULL WHERE run_id=?', retry ? 'queued' : 'failed', job.run_id);

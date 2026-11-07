@@ -9,11 +9,14 @@ import { normalizeDomain, domainOf } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
 import { refreshAssessment } from './complexity.js';
+import { mountAuth } from './auth.js';
 import { captureBaseline, enqueueRun, kickQueue } from './jobs.js';
 
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(ROOT, 'public')));
+app.set('trust proxy', true);
+mountAuth(app); // APP_PASSWORD → mọi API / báo giá / ảnh cần đăng nhập
 const h0 = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 app.get('/storage/runs/:run/:file', h0(async (req, res) => {
   const rel = `runs/${Number(req.params.run)}/${path.basename(req.params.file)}`;
