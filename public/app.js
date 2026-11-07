@@ -137,12 +137,41 @@ function renderProject() {
 }
 
 // ---------- BÁO GIÁ NHANH (1 màn hình) ----------
-const QUICK_GROUPS = [
-  ['Cơ bản', ['PRODUCT_CATALOG', 'BLOG', 'SEARCH', 'FILTER', 'CONTACT_FORM', 'CHAT_ZALO', 'MESSENGER', 'PHONE_CALL', 'MAP', 'SOCIAL', 'ANALYTICS', 'SEO']],
-  ['Bán hàng', ['CART', 'PAYMENT_ONLINE', 'SHIPPING', 'OMNI_SYNC']],
-  ['Khách hàng', ['MEMBER_LOGIN', 'LOYALTY', 'BOOKING', 'LANDING', 'TRACKING']],
-  ['Nâng cao', ['MULTILANG', 'INTERNATIONAL', 'AI_ASSISTANT', 'OMNI_CONTENT', 'ERP_INTEGRATION', 'DATA_MIGRATION']],
-];
+// Danh mục tính năng xếp theo CẤP GÓI matbao.ws: mỗi tính năng nằm ở nhóm của gói rẻ nhất có nó
+// (máy chủ tính từ bảng tiêu chí — tự đổi khi đồng bộ lại giá). Thứ tự trong nhóm theo mục dưới đây.
+const QUICK_FEATURES = ['SEARCH', 'FILTER', 'CONTACT_FORM', 'CHAT_ZALO', 'MESSENGER', 'PHONE_CALL', 'MAP', 'SOCIAL', 'ANALYTICS', 'SEO', 'PAYMENT_ONLINE', 'OMNI_SYNC', 'DATA_MIGRATION',
+  'PRODUCT_CATALOG', 'CART', 'BLOG', 'MULTILANG', 'BOOKING', 'LANDING', 'TRACKING', 'MEMBER_LOGIN', 'LOYALTY', 'OMNI_CONTENT', 'AI_ASSISTANT', 'INTERNATIONAL', 'ERP_INTEGRATION', 'SHIPPING'];
+const FEATURE_NOTE = {
+  PAYMENT_ONLINE: 'Gói có QR BIDV miễn phí; VNPay/MoMo tính thêm',
+  OMNI_SYNC: (t) => (t?.paid_until ? `+500.000 ₫ ở gói dưới ${t.paid_until}, miễn phí từ ${t.paid_until}` : ''),
+};
+// Thứ tự gói theo giá (cùng giá thì ZERO trước HERO, giữ thứ tự trên matbao.ws)
+function packageOrder() {
+  return S.meta.packages.lines.filter((l) => ['WEB_ZERO', 'WEB_HERO'].includes(l.id)).flatMap((l) => l.packages.map((p) => ({ p, l })))
+    .map((x, i) => ({ ...x, i })).sort((a, b) => a.p.price.min - b.p.price.min || a.i - b.i);
+}
+function featureGroups() {
+  const tiers = S.meta.feature_tiers || {};
+  const order = packageOrder().map((x) => x.p.code);
+  const groups = new Map();
+  for (const code of QUICK_FEATURES) {
+    const t = tiers[code];
+    const key = !t ? 'NONE' : t.all ? 'ALL' : t.code;
+    if (!groups.has(key)) groups.set(key, { key, tier: t, codes: [] });
+    groups.get(key).codes.push(code);
+  }
+  const rank = (g) => (g.key === 'ALL' ? -1 : g.key === 'NONE' ? 999 : order.indexOf(g.key));
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b)).map((g) => ({ ...g, rank: rank(g) }));
+}
+// Giới hạn khối lượng của gói đang chọn (mẫu trang theo cấp sitemap, sản phẩm, bài viết)
+function packageCapacity(code) {
+  const x = packageOrder().find((y) => y.p.code === code);
+  if (!x) return null;
+  const crit = x.l.criteria.find((c) => /bố cục trang web/i.test(c.title));
+  const lv = (String(x.p.features?.[crit?.no] || '').match(/S(\d)/) || [])[1];
+  const pages = lv ? S.meta.catalog.sitemap_capacity[lv] : null;
+  return { pages, products: x.p.products, posts: x.p.posts, sitemap: x.p.features?.[crit?.no] };
+}
 const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm cần nhập'], ['DATA_POSTS', 'Số bài viết cần nhập']];
 
 function renderQuick() {
@@ -162,9 +191,26 @@ function renderQuick() {
     const f = cat.features.find((x) => x.code === code); if (!f) return '';
     const rq = reqBy[code]; const on = rq?.decision === 'include'; const c = covOf(rq);
     const seen = rq && rq.evidence_codes.length ? (rq.source_kind === 'observed' ? chip('web mẫu có', 'ok') : chip('web mẫu có thể có', 'warn')) : '';
-    const bill = on && c ? (c.status === 'not_included' ? chip('+ tính thêm', 'accent') : c.status === 'paid_addon' ? chip('+ mua thêm', 'accent') : chip('trong gói', '')) : '';
-    return `<label style="display:flex;gap:6px;align-items:center;padding:4px 0"><input type="checkbox" data-qfeat="${code}" ${on ? 'checked' : ''} ${can('requirement.decide') ? '' : 'disabled'}> ${esc(f.title)} ${seen} ${bill}</label>`;
+    const bill = on && c && c.status !== 'included' ? (c.status === 'paid_addon' ? chip('+ mua thêm', 'accent') : chip('+ tính thêm', 'accent')) : '';
+    const n = FEATURE_NOTE[code]; const note = typeof n === 'function' ? n(S.meta.feature_tiers?.[code]) : n;
+    return `<label class="feat"><input type="checkbox" data-qfeat="${code}" ${on ? 'checked' : ''} ${can('requirement.decide') ? '' : 'disabled'}><span>${esc(f.title)} ${seen} ${bill}${note ? `<span class="small muted" style="display:block">${esc(note)}</span>` : ''}</span></label>`;
   };
+  const curRank = pkgCode ? packageOrder().findIndex((x) => x.p.code === pkgCode) : -1;
+  const tierCard = (g) => {
+    const t = g.tier;
+    const title = g.key === 'ALL' ? 'Có sẵn trong mọi gói' : g.key === 'NONE' ? 'Không có trong gói nào' : `${esc(t.code)} · ${esc(t.name)}`;
+    const sub = g.key === 'ALL' ? 'Gói ZERO / HERO nào cũng có' : g.key === 'NONE' ? 'Tính thêm theo giờ công' : `Cần tối thiểu gói ${esc(t.code)} — từ ${trieu(t.price)}`;
+    const nOn = g.codes.filter((c) => reqBy[c]?.decision === 'include').length;
+    let state = '';
+    if (g.key === 'ALL') state = chip('đã gồm', 'ok');
+    else if (g.key === 'NONE') state = nOn ? chip('+ tính thêm', 'accent') : '';
+    else if (curRank >= 0 && g.rank <= curRank) state = chip(`đã gồm trong ${esc(pkgCode)}`, 'ok');
+    else state = chip(nOn ? '+ tính thêm hoặc nâng gói' : 'chọn → cần nâng gói', nOn ? 'accent' : '');
+    return `<div class="tier ${g.key !== 'ALL' && g.key !== 'NONE' && curRank >= 0 && g.rank > curRank ? 'above' : ''}">
+      <div class="tier-head"><div><b>${title}</b><div class="small muted">${sub}</div></div><div>${state}</div></div>
+      ${g.codes.map(feat).join('')}</div>`;
+  };
+  const cap = pkgCode ? packageCapacity(pkgCode) : null;
   const qty = ([code, label]) => {
     const rq = reqBy[code]; const on = rq?.decision === 'include';
     const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : 'không';
@@ -192,7 +238,9 @@ function renderQuick() {
       <h3 style="margin-top:0">2. Tính năng cần làm</h3>
       ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
       <div class="row">${QUICK_QTY.map(qty).join('')}</div>
-      <div class="grid2" style="margin-top:10px">${QUICK_GROUPS.map(([g, codes]) => `<div><b class="small muted" style="text-transform:uppercase">${g}</b>${codes.map(feat).join('')}</div>`).join('')}</div>
+      ${cap ? `<p class="small muted" style="margin:6px 0 0">Gói <b>${esc(pkgCode)}</b> gồm: ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '')} · ${esc(cap.posts || '')}. Vượt số sản phẩm/bài viết sẽ cộng phí mua thêm.</p>` : ''}
+      <p class="small muted" style="margin:12px 0 6px">Tính năng xếp theo gói matbao.ws: chọn mục ở nhóm cao hơn thì giá chuyển lên gói đó (hoặc tính thêm nếu rẻ hơn).</p>
+      <div class="tiers">${featureGroups().map(tierCard).join('')}</div>
     </div>
   </div>
   <div>

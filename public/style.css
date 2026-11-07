@@ -57,4 +57,9 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space:
 tr.excluded td { opacity: .5; } tr.extra td:first-child { box-shadow: inset 3px 0 var(--accent); }
 details summary { cursor: pointer; }
 @media (max-width: 700px) { main { padding: 12px; } .top { padding: 8px 12px; } }
+label.feat { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; } label.feat input { margin-top: 3px; }
+.tiers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.tier { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); }
+.tier.above { background: var(--bg); }
+.tier-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 4px; }
 @media (max-width: 900px) { .quick { grid-template-columns: 1fr !important; } .quick .panel[style*="sticky"] { position: static !important; } }

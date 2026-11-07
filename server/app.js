@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, one, all, run, tx, audit, loadJson, activeSetting, ROOT, DATA_DIR } from './db.js';
 import { computeQuote, toJSONSafe } from './pricing.js';
-import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode } from './estimate.js';
+import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode, featureTiers } from './estimate.js';
 import { normalizeInput } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
@@ -47,7 +47,7 @@ app.use('/api', (req, res, next) => {
 // ---------- Danh mục, gói, cấu hình ----------
 app.get('/api/meta', (req, res) => {
   res.json({
-    catalog: catalog(), packages: packagesData(),
+    catalog: catalog(), packages: packagesData(), feature_tiers: featureTiers(catalog(), packagesData()),
     rate_card: parseSetting(activeSetting('rate_card')), policy: parseSetting(activeSetting('policy')),
     settings: all('SELECT s.*, u.name approved_by_name FROM settings_versions s LEFT JOIN users u ON u.id=s.approved_by ORDER BY kind, effective_from DESC, id DESC').map(parseSetting),
     perms: Object.fromEntries(Object.entries(PERMS).map(([k, roles]) => [k, roles.includes(req.user.role)])),

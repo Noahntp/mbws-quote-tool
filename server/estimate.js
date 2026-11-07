@@ -49,8 +49,11 @@ export function findPackage(packagesData, code) {
   return null;
 }
 
+// So khớp tên tiêu chí bỏ qua dấu cách & hoa/thường: bảng ZERO ghi "tin tức / Blog", bảng HERO ghi "tin tức/Blog"
+const normTitle = (s) => String(s).toLowerCase().normalize('NFC').replace(/\s+/g, '');
 function criterionValue(ctx, title) {
-  const c = ctx.line.criteria.find((c) => c.title.toLowerCase().startsWith(title.toLowerCase()));
+  const t = normTitle(title);
+  const c = ctx.line.criteria.find((c) => normTitle(c.title).startsWith(t));
   if (!c) return undefined;
   return ctx.pkg.features?.[c.no] ?? undefined;
 }
@@ -151,4 +154,27 @@ export function recommendPackages(catalog, packagesData, { requirements, lines, 
   }
   const ranked = results.filter((r) => r.eligible).sort((a, b) => a.price_list - b.price_list || a.package_price.min - b.package_price.min);
   return { best: ranked[0] || null, ranked, ineligible: results.filter((r) => !r.eligible) };
+}
+
+/**
+ * Mỗi tính năng có từ gói nào (gói rẻ nhất bao phủ), đọc từ bảng tiêu chí matbao.ws.
+ * Dùng để xếp danh mục tính năng theo cấp gói trên màn hình báo giá nhanh.
+ */
+export function featureTiers(catalog, packagesData) {
+  const list = packageList(packagesData).map((c, i) => ({ c, i })).sort((a, b) => a.c.pkg.price.min - b.c.pkg.price.min || a.i - b.i).map((x) => x.c);
+  const out = {};
+  for (const f of catalog.features) {
+    const q = f.default_qty ?? 1;
+    const st = list.map((c) => ({ c, cov: coverage(catalog, packagesData, c, f, q) }));
+    const first = st.find((x) => x.cov.status === 'included' || (x.cov.status === 'paid_addon' && !f.capacity));
+    const free = st.find((x) => x.cov.status === 'included');
+    out[f.code] = first ? {
+      code: first.c.pkg.code, name: first.c.pkg.name, price: first.c.pkg.price.min, line: first.c.line.id,
+      all: first.c === list[0],
+      paid_until: first !== free && free ? free.c.pkg.code : null,
+      addon_note: first !== free ? first.cov.note : null,
+      note: free?.cov.note && free.cov.note !== 'Có trong gói' ? free.cov.note : null,
+    } : null;
+  }
+  return out;
 }
