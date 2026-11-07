@@ -8,6 +8,7 @@ import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureBy
 import { normalizeDomain, domainOf } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
+import { captureBaseline } from './jobs.js';
 
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -518,6 +519,87 @@ function projectState(pid) {
   else status = 'draft';
   return { status, preview: result, release, hash, meta: b.meta, applied: b.applied && { coverage: b.applied.coverage, addons: b.applied.addons }, build: b };
 }
+
+// ---------- Giá sơ bộ theo web mẫu + phát sinh ----------
+// Tính giá cho một tập yêu cầu giả định (không ghi CSDL). autoPackage=true: luôn chọn gói rẻ nhất phù hợp.
+function simulatePrice(pid, b, reqs, { autoPackage = false } = {}) {
+  const cat = catalog(); const pkgData = packagesData();
+  const manual = all("SELECT * FROM estimate_lines WHERE project_id=? AND source='manual'", pid)
+    .map((l) => ({ id: l.id, code: l.code, title: l.title, group: l.grp, role: l.role, unit: l.unit, qty: l.qty, o: l.o, m: l.m, p: l.p, source: 'manual', billing_override: l.billing_override, include: !!l.include }));
+  let lines = [...buildAutoLines(cat, reqs), ...manual];
+  const common = { rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks };
+  const mode = b.input.mode;
+  let code = mode === 'package' && !autoPackage ? b.pricing.package_code : null;
+  if (mode === 'package' && !code && reqs.some((r) => r.decision === 'include')) code = recommendPackages(cat, pkgData, { requirements: reqs, lines, ...common }).best?.code;
+  let pkg = null; let addons = [];
+  if (mode === 'package' && code) {
+    const ctx = findPackage(pkgData, code);
+    const ap = applyPackage(cat, pkgData, ctx, lines, reqs);
+    lines = ap.lines; addons = ap.addons;
+    const chosen = !autoPackage && b.pricing.package_code === code && b.pricing.package_price != null && b.pricing.package_price !== '';
+    pkg = { code, name: ctx.pkg.name, price: chosen ? Number(b.pricing.package_price) : ctx.pkg.price.min, price_min: ctx.pkg.price.min, price_max: ctx.pkg.price.max, renewal_per_year: ctx.pkg.renewal_per_year };
+  }
+  const r = computeQuote({ mode, ...common, lines, package: pkg, addons: [...addons, ...(b.pricing.extra_addons || [])], recurring: [], discount_pct: b.input.discount_pct, risk_override: b.input.risk_override });
+  return { price: Number(r.price_net ?? 0), package: code, package_name: pkg?.name || null, ok: r.ok !== false };
+}
+
+const QTY_FEATURES = new Set(['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS']);
+app.get('/api/projects/:id/quick', h((req, res) => {
+  const pid = Number(req.params.id);
+  const b = buildInput(pid);
+  const cat = catalog();
+  const title = (code) => cat.features.find((f) => f.code === code)?.title || code;
+  let baseline = b.pricing.baseline || null;
+  if (!baseline) { // hồ sơ tạo trước khi có tính năng này: dựng lại từ dẫn chứng quét
+    const run1 = one("SELECT url FROM analysis_runs WHERE project_id=? AND status='done' ORDER BY id LIMIT 1", pid);
+    if (run1) baseline = captureBaseline(pid, run1.url);
+  }
+  const current = b.reqs.map((r) => ({ ...r }));
+  const cur = simulatePrice(pid, b, current);
+  let base = null; const changes = [];
+  if (baseline) {
+    const bf = baseline.features || {};
+    const baseReqs = Object.entries(bf).map(([feature, quantity], i) => ({ id: -1 - i, feature, decision: 'include', quantity }));
+    base = simulatePrice(pid, b, baseReqs, { autoPackage: true });
+    const now = Object.fromEntries(current.filter((r) => r.decision === 'include' && r.feature).map((r) => [r.feature, r.quantity]));
+    for (const [f, q] of Object.entries(now)) {
+      if (!(f in bf)) changes.push({ code: f, title: title(f), kind: 'added', to: q });
+      else if (QTY_FEATURES.has(f) && Number(q) !== Number(bf[f])) changes.push({ code: f, title: title(f), kind: 'qty', from: bf[f], to: q });
+    }
+    for (const f of Object.keys(bf)) if (!(f in now)) changes.push({ code: f, title: title(f), kind: 'removed', from: bf[f] });
+  }
+  // Giá thay đổi nếu bật/tắt riêng từng tính năng (so với lựa chọn hiện tại)
+  const marginal = {};
+  for (const f of cat.features) {
+    if (QTY_FEATURES.has(f.code) || ['DESIGN_LEVEL', 'REVIEW_ROUNDS'].includes(f.code)) continue;
+    const ex = current.find((r) => r.feature === f.code);
+    const on = ex?.decision === 'include';
+    const alt = on ? current.map((r) => (r.feature === f.code ? { ...r, decision: 'exclude' } : r))
+      : ex ? current.map((r) => (r.feature === f.code ? { ...r, decision: 'include', quantity: r.quantity ?? f.default_qty ?? 1 } : r))
+        : [...current, { id: -999, feature: f.code, decision: 'include', quantity: f.default_qty ?? 1 }];
+    const sim = simulatePrice(pid, b, alt);
+    marginal[f.code] = { delta: sim.price - cur.price, package: sim.package };
+  }
+  const officialNow = Number(projectState(pid).preview.price_net ?? 0);
+  res.json({
+    baseline: baseline ? { ...baseline, price: base.price, package: base.package, package_name: base.package_name, count: Object.keys(baseline.features || {}).length } : null,
+    current: { price: officialNow, package: cur.package },
+    extra: base ? officialNow - base.price : null,
+    changes, marginal,
+  });
+}));
+
+app.post('/api/projects/:id/baseline', h((req, res) => {
+  need(req, 'pricing.edit');
+  const pid = Number(req.params.id);
+  const p = one('SELECT pricing_json FROM projects WHERE id=?', pid);
+  const pricing = JSON.parse(p.pricing_json || '{}');
+  const features = Object.fromEntries(all("SELECT feature, quantity FROM requirements WHERE project_id=? AND decision='include' AND feature IS NOT NULL", pid).map((r) => [r.feature, r.quantity ?? 1]));
+  pricing.baseline = { features, domain: pricing.baseline?.domain || null, captured_at: new Date().toISOString(), manual: true };
+  run("UPDATE projects SET pricing_json=?, rev=rev+1, updated_at=datetime('now') WHERE id=?", JSON.stringify(pricing), pid);
+  audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'set_baseline', after: features });
+  res.json({ ok: true });
+}));
 
 app.get('/api/projects/:id/recommend', h((req, res) => {
   const pid = Number(req.params.id);

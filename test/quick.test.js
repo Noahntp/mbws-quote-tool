@@ -1,0 +1,72 @@
+// Kiểm thử tích hợp luồng "nhập tên miền → giá sơ bộ → chọn thêm → phát sinh" (CSDL tạm, không cần mạng).
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mbws-quick-'));
+process.env.DATA_DIR = dir; // phải đặt trước khi nạp db.js
+const { app } = await import('../server/app.js');
+const { ingest } = await import('../server/jobs.js');
+const { run } = await import('../server/db.js');
+
+let server; let base;
+before(async () => { await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); }); base = `http://127.0.0.1:${server.address().port}`; });
+after(() => { server?.close(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+
+const api = async (url, method = 'GET', body) => {
+  const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', 'x-user-id': '1' }, body: body ? JSON.stringify(body) : undefined });
+  return { status: r.status, json: await r.json() };
+};
+
+test('tên miền sai bị từ chối, tên miền đúng tạo báo giá đặt tên theo tên miền', async () => {
+  assert.equal((await api('/api/projects', 'POST', { ref_urls: ['abc'] })).status, 400);
+  const r = await api('/api/projects', 'POST', { ref_urls: ['https://www.nhahang-mau.vn/thuc-don'] });
+  assert.equal(r.status, 200);
+  const p = await api(`/api/projects/${r.json.id}`);
+  assert.equal(p.json.project.name, 'nhahang-mau.vn');
+  assert.equal(p.json.refs[0].url, 'https://www.nhahang-mau.vn/');
+  assert.equal(p.json.runs[0].status, 'queued'); // tự đưa vào hàng đợi quét
+});
+
+test('giá sơ bộ theo web mẫu, rồi phát sinh khi chọn thêm', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['nhahang-test.vn'] });
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  run("UPDATE analysis_runs SET status='running' WHERE id=?", runId); // không để vòng lặp quét thật nhận job
+  // Giả lập kết quả quét: Zalo & đặt bàn thấy rõ; tích điểm chỉ nhắc trong nội dung
+  ingest({ id: runId, project_id: id, url: 'https://nhahang-test.vn/' }, {
+    ok: true, input: 'https://nhahang-test.vn/', sitemap: {}, coverage: { discovered: 3 },
+    templates: [{ template: 'home', kind: 'home', url_count: 1 }, { template: 'contact', kind: 'contact', url_count: 1 }, { template: 'blog:list', kind: 'blog', url_count: 1 }],
+    pages: [{ url: 'https://nhahang-test.vn/', template: 'home', captured_at: new Date().toISOString(), desktop: { file: 'a.jpg', hash: 'h', viewport: '1366x900' },
+      features: [
+        { feature: 'CHAT_ZALO', detail: 'https://zalo.me/1', verification: 'observed' },
+        { feature: 'BOOKING', detail: 'Hệ thống đặt chỗ booking.nhahang-test.vn', verification: 'observed' },
+        { feature: 'LOYALTY', detail: 'Nội dung nhắc tới tích điểm', verification: 'inferred' },
+      ] }],
+  });
+  let q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.ok(q.baseline, 'phải có giá gốc sau khi quét');
+  assert.deepEqual(Object.keys(q.baseline.features).sort(), ['BOOKING', 'CHAT_ZALO', 'PAGES']); // tích điểm (suy luận) không vào giá gốc
+  assert.ok(q.baseline.price > 0 && q.baseline.package, 'phải có giá sơ bộ và gói đề xuất');
+  assert.equal(q.extra, 0);
+  const addLogin = q.marginal.MEMBER_LOGIN.delta;
+  assert.ok(addLogin > 0, 'mục chưa chọn phải ghi giá cộng thêm');
+  assert.equal(q.marginal.CHAT_ZALO.delta, 0); // bỏ Zalo không đổi giá (gói nào cũng có)
+
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'MEMBER_LOGIN', include: true });
+  q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.extra, q.current.price - q.baseline.price);
+  assert.equal(q.extra, addLogin); // phát sinh đúng bằng giá cộng thêm đã báo trước khi tick
+  assert.deepEqual(q.changes.map((c) => c.kind + ':' + c.code), ['added:MEMBER_LOGIN']);
+
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'BOOKING', include: false });
+  q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.ok(q.changes.some((c) => c.kind === 'removed' && c.code === 'BOOKING'));
+
+  // Chốt lựa chọn hiện tại làm giá gốc mới → phát sinh về 0
+  await api(`/api/projects/${id}/baseline`, 'POST', {});
+  q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.extra, 0);
+  assert.equal(q.changes.length, 0);
+});

@@ -62,6 +62,24 @@ function nextCode(table, projectId, prefix) {
 
 const RANK = { observed: 3, client: 3, inferred: 2, unverified: 1 };
 
+// Phạm vi của web mẫu = tính năng THẤY RÕ trên web (dẫn chứng observed) + số mẫu trang đếm được.
+// Tính năng khách thêm từ mô tả hay tick tay sau đó là phần PHÁT SINH so với giá gốc này.
+export function baselineFromEvidence(projectId) {
+  const seen = new Set(all("SELECT DISTINCT feature FROM evidence WHERE project_id=? AND verification='observed' AND feature IS NOT NULL", projectId).map((r) => r.feature));
+  if (one("SELECT 1 FROM evidence WHERE project_id=? AND feature='PAGES'", projectId)) seen.add('PAGES');
+  const features = {};
+  for (const r of all('SELECT feature, quantity FROM requirements WHERE project_id=? AND feature IS NOT NULL', projectId)) if (seen.has(r.feature)) features[r.feature] = r.quantity ?? 1;
+  return features;
+}
+export function captureBaseline(projectId, url, force = false) {
+  const row = one('SELECT pricing_json FROM projects WHERE id=?', projectId);
+  const pricing = JSON.parse(row?.pricing_json || '{}');
+  if (pricing.baseline && !force) return pricing.baseline;
+  pricing.baseline = { features: baselineFromEvidence(projectId), domain: url, captured_at: new Date().toISOString() };
+  run('UPDATE projects SET pricing_json=? WHERE id=?', JSON.stringify(pricing), projectId);
+  return pricing.baseline;
+}
+
 export function ingest(job, res) {
   const catalog = loadJson('data/catalog.json');
   tx(() => {
@@ -136,6 +154,7 @@ export function ingest(job, res) {
         run('INSERT INTO questions (project_id, code, requirement_id, text, blocking) VALUES (?,?,?,?,?)', job.project_id, nextCode('questions', job.project_id, 'Q'), Number(r.lastInsertRowid), q.text, q.blocking ? 1 : 0);
       }
     }
+    if (res.ok) captureBaseline(job.project_id, job.url);
     run(`UPDATE analysis_runs SET status=?, finished_at=datetime('now'), locked_at=NULL, coverage_json=?, robots_json=?, templates_json=?, crawler_version=?, error=? WHERE id=?`,
       res.ok ? 'done' : 'failed', JSON.stringify({ ...(res.coverage || {}), sitemap: res.sitemap, generator: res.generator, blocked_requests: res.blocked_requests, errors: (res.errors || []).slice(0, 20) }),
       JSON.stringify(res.robots || {}), JSON.stringify(tpl), res.crawler_version || null, res.fatal || null, job.id);

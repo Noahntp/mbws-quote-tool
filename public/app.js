@@ -106,8 +106,9 @@ async function openProject(id, keepScroll, fromPoll) {
   const y = window.scrollY;
   const project = await api(`/api/projects/${id}`);
   const rec = S.tab === 'quick' ? await api(`/api/projects/${id}/recommend`).catch(() => null) : S.rec;
+  const quick = S.tab === 'quick' ? await api(`/api/projects/${id}/quick`).catch(() => null) : null;
   if (fromPoll && isEditing()) return; // người dùng bắt đầu gõ trong lúc chờ mạng
-  S.project = project; S.rec = rec;
+  S.project = project; S.rec = rec; S.quick = quick;
   const ui = captureUi();
   renderProject();
   restoreUi(ui);
@@ -195,7 +196,13 @@ function renderQuick() {
     const f = cat.features.find((x) => x.code === code); if (!f) return '';
     const rq = reqBy[code]; const on = rq?.decision === 'include'; const c = covOf(rq);
     const seen = rq && rq.evidence_codes.length ? (rq.source_kind === 'observed' ? chip('web mẫu có', 'ok') : chip('web mẫu có thể có', 'warn')) : '';
-    const bill = on && c && c.status !== 'included' ? (c.status === 'paid_addon' ? chip('+ mua thêm', 'accent') : chip('+ tính thêm', 'accent')) : '';
+    const Q = S.quick; const mg = Q?.marginal?.[code];
+    const inBase = Q?.baseline && code in (Q.baseline.features || {});
+    let bill = '';
+    if (mg) {
+      if (!on) bill = mg.delta > 0 ? `<span title="${mg.package && mg.package !== Q.current.package ? 'Giá sẽ theo gói ' + esc(mg.package) : 'Tính thêm ngoài gói'}">${chip('+' + money(mg.delta), 'accent')}</span>` : mg.delta < 0 ? chip(money(mg.delta), 'ok') : '<span class="small muted">+0 ₫</span>';
+      else if (Q.baseline && !inBase) { const t = S.meta.feature_tiers?.[code]; bill = chip('phát sinh' + (t && !t.all ? ' · cần ' + t.code : ''), 'accent'); }
+    } else if (on && c && c.status !== 'included') bill = chip('+ tính thêm', 'accent');
     const n = FEATURE_NOTE[code]; const note = typeof n === 'function' ? n(S.meta.feature_tiers?.[code]) : n;
     return `<label class="feat"><input type="checkbox" data-qfeat="${code}" ${on ? 'checked' : ''} ${can('requirement.decide') ? '' : 'disabled'}><span>${esc(f.title)} ${seen} ${bill}${note ? `<span class="small muted" style="display:block">${esc(note)}</span>` : ''}</span></label>`;
   };
@@ -239,7 +246,8 @@ function renderQuick() {
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
     </div>
     <div class="panel">
-      <h3 style="margin-top:0">2. Tính năng cần làm</h3>
+      <h3 style="margin-top:0">${S.quick?.baseline ? '2. Chọn thêm tính năng (tính phát sinh)' : '2. Tính năng cần làm'}</h3>
+      ${S.quick?.baseline ? `<p class="small muted" style="margin:0 0 6px">Đã tick sẵn ${S.quick.baseline.count} tính năng thấy trên ${esc(domainLabel(S.quick.baseline.domain))}. Mỗi mục chưa chọn ghi sẵn giá cộng thêm nếu chọn.</p>` : ''}
       ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
       <div class="row">${QUICK_QTY.map(qty).join('')}</div>
       ${cap ? `<p class="small muted" style="margin:6px 0 0">Gói <b>${esc(pkgCode)}</b> gồm: ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '')} · ${esc(cap.posts || '')}. Vượt số sản phẩm/bài viết sẽ cộng phí mua thêm.</p>` : ''}
@@ -250,17 +258,16 @@ function renderQuick() {
   <div>
     <div class="panel" style="position:sticky;top:64px;border-color:var(--accent)">
       <h3 style="margin-top:0">3. Giá</h3>
-      ${!included.length ? `<p class="muted">Tick tính năng (hoặc nhập web mẫu / mô tả) để ra giá.</p>` : `
-      ${pkg ? `<div class="small muted">Gói ${p.pricing.package_code ? 'đã chọn' : 'đề xuất (rẻ nhất phù hợp)'}</div><div style="font-size:16px"><b>${esc(pkg.code)}</b> – ${esc(pkg.name)}</div>` : '<div class="small muted">Tính theo chi phí</div>'}
-      <div style="font-size:28px;font-weight:800;color:var(--accent);margin:6px 0">${vnd(r.price_net)}</div>
-      <div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>
-      <table style="margin-top:8px"><tbody>
+      ${priceStepsHtml(P, r, pkg, running)}
+      ${!included.length ? (running.length ? '' : `<p class="muted">Nhập tên miền web mẫu (hoặc tick tính năng) để ra giá.</p>`) : `
+      <details ${S.quick?.baseline ? '' : 'open'} style="margin-top:8px"><summary class="small">Chi tiết theo gói ${esc(pkg?.code || '')}</summary>
+      <table style="margin-top:6px"><tbody>
         ${r.mode === 'package' ? `<tr><td>Giá gói</td><td class="n">${vnd(r.package_price)}</td></tr>` : ''}
         ${(r.addons || []).map((a) => `<tr><td>${esc(a.name)} ×${a.qty}</td><td class="n">${vnd(a.amount)}</td></tr>`).join('')}
         ${Number(r.extras_sell) > 0 ? `<tr><td>Tính thêm ngoài gói</td><td class="n">${vnd(r.extras_sell)}</td></tr>` : ''}
         ${Number(r.discount_amount) > 0 ? `<tr><td>Giảm ${r.discount_pct}%</td><td class="n">− ${vnd(r.discount_amount)}</td></tr>` : ''}
         ${(r.recurring || []).map((x) => `<tr><td class="muted">${esc(x.title)}</td><td class="n muted">${vnd(x.amount)}/${esc(x.period)}</td></tr>`).join('')}
-      </tbody></table>
+      </tbody></table></details>
       <div class="row" style="margin-top:8px"><label class="f" style="min-width:0">Giảm giá %<input class="num" type="number" step="0.5" min="0" data-pr="discount_pct" value="${esc(p.pricing.discount_pct || 0)}"></label>
         <button class="primary" data-act="printQuick" ${fatal.length ? 'disabled' : ''} style="flex:1;padding:10px">🖨 In báo giá</button></div>
       ${fatal.length ? `<ul class="checks small">${fatal.map((c) => `<li class="error">⛔ ${esc(c.message)}</li>`).join('')}</ul>` : ''}
@@ -269,6 +276,35 @@ function renderQuick() {
       ${questions.length ? `<h3>Nên hỏi khách</h3><ul class="small" style="margin:0 0 0 16px;padding:0">${questions.slice(0, 6).map((q) => `<li>${esc(q.text)}</li>`).join('')}</ul>` : ''}`}
     </div>
   </div></div>`;
+}
+
+const money = (n) => { const a = Math.abs(Number(n) || 0); const s = a >= 1e6 ? (a / 1e6).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) + ' tr' : a ? Math.round(a / 1000).toLocaleString('vi-VN') + 'k' : '0 ₫'; return (n < 0 ? '−' : '') + s; };
+const domainLabel = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || 'web mẫu'; } };
+
+// ① Giá sơ bộ cho web giống web mẫu → ② Phát sinh theo tính năng chọn thêm → Tổng
+function priceStepsHtml(P, r, pkg, running) {
+  const Q = S.quick;
+  if (!Q?.baseline) {
+    if (running.length) return `<div class="step"><div class="small muted">① Đánh giá sơ bộ web mẫu</div><div style="font-size:18px;margin:6px 0">⏳ Đang quét ${esc(domainLabel(running[0].url))}…</div><div class="small muted">Giá sơ bộ hiện sau 1–4 phút.</div></div>`;
+    if (!P.requirements.some((x) => x.decision === 'include')) return '';
+    return `${pkg ? `<div class="small muted">Gói ${P.project.pricing.package_code ? 'đã chọn' : 'đề xuất (rẻ nhất phù hợp)'}</div><div style="font-size:16px"><b>${esc(pkg.code)}</b> – ${esc(pkg.name)}</div>` : ''}
+      <div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>`;
+  }
+  const b = Q.baseline;
+  const ch = Q.changes || [];
+  const tierOf = (code) => { const t = S.meta.feature_tiers?.[code]; return t && !t.all ? ` <span class="muted">· cần ${esc(t.code)}</span>` : !t ? ' <span class="muted">· ngoài gói</span>' : ''; };
+  const line = (c) => c.kind === 'added' ? `<li>+ ${esc(c.title)}${Number(c.to) > 1 ? ` (${num(c.to, 0)})` : ''}${tierOf(c.code)}</li>` : c.kind === 'removed' ? `<li>− Bỏ ${esc(c.title)}</li>` : `<li>${esc(c.title)}: ${num(c.from, 0)} → ${num(c.to, 0)}</li>`;
+  return `
+    <div class="step"><div class="small muted">① Web giống <b>${esc(domainLabel(b.domain))}</b> — đánh giá sơ bộ</div>
+      <div class="big2">${vnd(b.price)}</div>
+      <div class="small muted">Gói ${esc(b.package || '')}${b.package_name ? ' – ' + esc(b.package_name) : ''} · ${b.count} tính năng thấy trên web mẫu</div></div>
+    <div class="step"><div class="small muted">② Phát sinh theo tính năng chọn thêm</div>
+      <div class="big2" style="color:${Q.extra > 0 ? 'var(--accent)' : 'inherit'}">${Q.extra >= 0 ? '+' : '−'} ${vnd(Math.abs(Q.extra))}</div>
+      ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : '<div class="small muted">Chưa chọn thêm — tick ở mục 2, mỗi mục ghi sẵn giá cộng thêm.</div>'}
+      ${Q.current.package && Q.current.package !== b.package ? `<div class="small">Gói chuyển: ${esc(b.package)} → <b>${esc(Q.current.package)}</b></div>` : ''}</div>
+    <div class="step total"><div class="small muted">Tổng báo giá${pkg ? ` · gói ${esc(pkg.code)}` : ''}</div>
+      <div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>
+      ${ch.length && can('pricing.edit') ? `<button class="link small" data-act="setBaseline" title="Dùng khi khách chốt phạm vi mới làm mốc">↺ Lấy lựa chọn hiện tại làm giá gốc</button>` : ''}</div>`;
 }
 
 // Gợi ý bước kế tiếp để luôn biết vì sao chưa có giá
@@ -685,6 +721,7 @@ const ACT = {
   applyBrief: run(async () => { const r = await api(`/api/projects/${pid()}/brief-apply`, 'POST', { brief: document.getElementById('qBrief').value }); toast(r.found ? `Đã nhận ra ${r.found} tính năng từ mô tả` : 'Không nhận ra tính năng nào — hãy tick tay ở mục 2', !r.found); reload(); }),
   printQuick: (el) => { window.open(`/quote/project/${pid()}`, '_blank'); },
   autoPkg: run(async () => { await savePricing({ package_code: null, package_price: null }); }),
+  setBaseline: run(async () => { if (!confirm('Lấy các tính năng đang chọn làm giá gốc? Phần phát sinh sẽ tính lại từ 0.')) return; await api(`/api/projects/${pid()}/baseline`, 'POST', {}); toast('Đã đặt giá gốc mới'); reload(); }),
   saveProfile: run(async () => {
     const b = { rev: S.project.project.rev };
     document.querySelectorAll('[data-pf]').forEach((i) => { b[i.dataset.pf] = i.value; });

@@ -57,6 +57,10 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space:
 tr.excluded td { opacity: .5; } tr.extra td:first-child { box-shadow: inset 3px 0 var(--accent); }
 details summary { cursor: pointer; }
 @media (max-width: 700px) { main { padding: 12px; } .top { padding: 8px 12px; } }
+.step { border-bottom: 1px dashed var(--line); padding: 8px 0; }
+.step .big2 { font-size: 22px; font-weight: 800; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.step.total { border-bottom: none; }
+.big { font-size: 28px; font-weight: 800; color: var(--accent); margin: 4px 0; font-variant-numeric: tabular-nums; }
 label.feat { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; } label.feat input { margin-top: 3px; }
 .tiers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 .tier { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); }
