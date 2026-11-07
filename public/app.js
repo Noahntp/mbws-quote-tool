@@ -12,7 +12,7 @@ async function api(url, method = 'GET', body) {
   const r = await fetch(url, { method, headers: { 'content-type': 'application/json', 'x-user-id': String(S.me?.id || '') }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
   if (r.status === 401 && j.code === 'LOGIN_REQUIRED') { boot(); throw new Error('Phiên đăng nhập đã hết, vui lòng đăng nhập lại.'); }
-  if (!r.ok) { const extra = j.checks ? ': ' + j.checks.map((c) => c.message).join(' | ') : ''; throw new Error((j.error || r.statusText) + extra); }
+  if (!r.ok) { const extra = j.checks ? ': ' + j.checks.map((c) => c.message).join(' | ') : ''; throw Object.assign(new Error((j.error || r.statusText || 'Lỗi máy chủ ' + r.status) + extra), { status: r.status }); }
   return j;
 }
 const can = (p) => !!S.meta?.perms?.[p];
@@ -55,7 +55,16 @@ async function boot() {
 }
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
-async function loadMeta() { S.meta = await api('/api/meta'); }
+async function loadMeta() { S.meta = await api('/api/meta'); storageBanner(); }
+// Máy chủ chưa nối CSDL bền vững (Vercel chưa có Postgres) → dữ liệu có thể mất bất cứ lúc nào: báo rõ cho người dùng.
+function storageBanner() {
+  document.getElementById('storageWarn')?.remove();
+  if (S.meta?.storage?.persistent !== false) return;
+  const d = document.createElement('div');
+  d.id = 'storageWarn'; d.className = 'storage-warn';
+  d.textContent = '⚠ Máy chủ chưa nối cơ sở dữ liệu bền vững (Postgres): hồ sơ và kết quả quét có thể biến mất sau vài phút. Chưa dùng bản này cho báo giá thật.';
+  document.querySelector('header.top')?.after(d);
+}
 
 function route() {
   clearInterval(S.poll);
@@ -123,9 +132,18 @@ function restoreUi({ focus, dirty }) {
 async function openProject(id, keepScroll, fromPoll) {
   if (fromPoll && isEditing()) return; // để lần cập nhật sau
   const y = window.scrollY;
-  const project = await api(`/api/projects/${id}`);
-  const rec = S.tab === 'quick' ? await api(`/api/projects/${id}/recommend`).catch(() => null) : S.rec;
-  const quick = S.tab === 'quick' ? await api(`/api/projects/${id}/quick`).catch(() => null) : null;
+  let project; let rec; let quick;
+  try {
+    project = await api(`/api/projects/${id}`);
+    rec = S.tab === 'quick' ? await api(`/api/projects/${id}/recommend`).catch(() => null) : S.rec;
+    quick = S.tab === 'quick' ? await api(`/api/projects/${id}/quick`) : null;
+  } catch (e) {
+    clearInterval(S.poll); // không gọi lại liên tục khi hồ sơ không còn / máy chủ lỗi
+    if (fromPoll && e.status !== 404 && S.project?.project?.id === id) { toast('Mất kết nối khi cập nhật tiến độ quét: ' + e.message, true); return; }
+    $app.innerHTML = `<div class="panel"><h2>Không mở được hồ sơ #${id}</h2><p class="checks"><span class="error">${esc(e.message)}</span></p>
+      <p><a href="#/">← Về danh sách hồ sơ</a> · <a href="#/p/${id}" onclick="location.reload()">Thử lại</a></p></div>`;
+    return;
+  }
   if (fromPoll && isEditing()) return; // người dùng bắt đầu gõ trong lúc chờ mạng
   S.project = project; S.rec = rec; S.quick = quick;
   const ui = captureUi();

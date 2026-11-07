@@ -28,6 +28,9 @@ test('luồng đầy đủ qua API', async () => {
   assert.equal((await api('/api/users')).length, 4);
   const meta = await api('/api/meta');
   assert.ok(meta.catalog.features.length > 20 && meta.packages.lines.length === 4 && meta.feature_tiers.BLOG);
+  assert.equal(meta.storage.persistent, true); // chạy trên máy (không phải serverless) → dữ liệu bền
+  // hồ sơ không tồn tại → 404 rõ ràng, không phải 500
+  for (const u of ['/api/projects/99999', '/api/projects/99999/quick', '/api/projects/99999/recommend']) await api(u, 'GET', null, 1, 404);
   await api('/api/settings', 'POST', { kind: 'policy', version: 'POL-T', effective_from: '2026-02-01', data: { ...meta.policy.data, vat_pct: 8 } }, 3);
   await api('/api/settings', 'POST', { kind: 'policy', version: 'POL-T2', effective_from: '2026-03-01', data: { ...meta.policy.data, target_margin_pct: 10, min_margin_pct: 20 } }, 3, 400);
   await api('/api/settings', 'POST', { kind: 'rate_card', version: 'RC-T', effective_from: '2026-02-01', data: meta.rate_card.data }, 1, 403); // sales không sửa đơn giá

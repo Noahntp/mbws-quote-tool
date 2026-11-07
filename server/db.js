@@ -15,6 +15,8 @@ export const DATA_DIR = process.env.DATA_DIR || (IS_SERVERLESS ? '/tmp/storage' 
 const PG_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
 export const DRIVER = process.env.DB_DRIVER || (PG_URL ? 'pg' : 'sqlite');
 export const IS_PG = DRIVER === 'pg' || DRIVER === 'pglite';
+// Dữ liệu có còn sau khi máy chủ khởi động lại? Serverless (Vercel) chỉ bền khi nối Postgres thật; SQLite/PGlite ở /tmp mất bất cứ lúc nào.
+export const PERSISTENT = !IS_SERVERLESS || DRIVER === 'pg';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('sales','tech','pricing_manager','admin')));

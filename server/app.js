@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { one, all, run, tx, audit, loadJson, activeSetting, ready, ROOT, DATA_DIR, IS_SERVERLESS } from './db.js';
+import { one, all, run, tx, audit, loadJson, activeSetting, ready, ROOT, DATA_DIR, IS_SERVERLESS, PERSISTENT, DRIVER } from './db.js';
 import { computeQuote, toJSONSafe } from './pricing.js';
 import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode, featureTiers, packagePrice } from './estimate.js';
 import { normalizeDomain, domainOf } from './crawler/urls.js';
@@ -71,6 +71,7 @@ app.get('/api/meta', h(async (req, res) => {
     rate_card: parseSetting(await activeSetting('rate_card')), policy: parseSetting(await activeSetting('policy')),
     settings: (await all('SELECT s.*, u.name approved_by_name FROM settings_versions s LEFT JOIN users u ON u.id=s.approved_by ORDER BY kind, effective_from DESC, id DESC')).map(parseSetting),
     perms: Object.fromEntries(Object.entries(PERMS).map(([k, roles]) => [k, roles.includes(req.user.role)])),
+    storage: { persistent: PERSISTENT, driver: DRIVER },
   });
 }));
 const parseSetting = (s) => (s ? { ...s, data: JSON.parse(s.data_json), data_json: undefined } : null);
@@ -221,7 +222,7 @@ app.post('/api/projects/:id/quick-feature', h(async (req, res) => {
 app.get('/api/projects/:id', h(async (req, res) => {
   const id = Number(req.params.id);
   const p = await one('SELECT p.*, u.name owner_name FROM projects p LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?', id);
-  if (!p) throw new HttpError(404, 'Không có hồ sơ');
+  if (!p) await projectOr404(id);
   const st = await projectState(id);
   kickQueue(); // serverless: tiếp tục lượt quét đang chờ (nếu có)
   res.json({
@@ -363,7 +364,7 @@ app.post('/api/projects/:id/requirements', h(async (req, res) => {
 
 app.post('/api/projects/:id/brief-suggest', h(async (req, res) => {
   need(req, 'requirement.edit');
-  const p = await one('SELECT * FROM projects WHERE id=?', Number(req.params.id));
+  const p = await projectOr404(Number(req.params.id));
   const out = await suggestFromBrief(catalog(), req.body.brief ?? p.brief ?? '');
   res.json(out);
 }));
@@ -473,8 +474,14 @@ function complexityHint(pricing, reqs) {
   const level = Number(dl.quantity || c.level);
   return level === c.level ? { level, fraction: c.fraction, enterprise: c.enterprise } : { level, fraction: 0, enterprise: false };
 }
+// Hồ sơ không tồn tại → 404 rõ ràng (trước đây đọc p.pricing_json của undefined → 500)
+async function projectOr404(pid, cols = '*') {
+  const p = await one(`SELECT ${cols} FROM projects WHERE id=?`, pid);
+  if (!p) throw new HttpError(404, PERSISTENT ? 'Không có hồ sơ' : 'Không có hồ sơ — máy chủ chưa nối CSDL bền vững nên dữ liệu đã mất khi đổi phiên chạy.');
+  return p;
+}
 async function buildInput(pid) {
-  const p = await one('SELECT * FROM projects WHERE id=?', pid);
+  const p = await projectOr404(pid);
   const pricing = JSON.parse(p.pricing_json);
   const rc = parseSetting(await activeSetting('rate_card'));
   const pol = parseSetting(await activeSetting('policy'));
@@ -636,7 +643,7 @@ app.get('/api/projects/:id/quick', h(async (req, res) => {
 app.post('/api/projects/:id/baseline', h(async (req, res) => {
   need(req, 'pricing.edit');
   const pid = Number(req.params.id);
-  const p = await one('SELECT pricing_json FROM projects WHERE id=?', pid);
+  const p = await projectOr404(pid, 'pricing_json');
   const pricing = JSON.parse(p.pricing_json || '{}');
   const features = Object.fromEntries((await all("SELECT feature, quantity FROM requirements WHERE project_id=? AND decision='include' AND feature IS NOT NULL", pid)).map((r) => [r.feature, r.quantity ?? 1]));
   pricing.baseline = { features, domain: pricing.baseline?.domain || null, captured_at: new Date().toISOString(), manual: true };
