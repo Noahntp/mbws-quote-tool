@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { launchChromium, devicesPreset } from './browser.js';
+import { launchChromium, devicesPreset, IS_SERVERLESS } from './browser.js';
 import { normalizeInput, normalizeUrl, isHtmlCandidate, sameSite, dedupeKey, groupTemplates, sampleUrls, parseRobots, robotsAllows, classify } from './urls.js';
 import { assertPublicUrl, assertPublicHost, safeFetchText } from './ssrf.js';
 import { detectInPage } from './detect.js';
@@ -37,6 +37,8 @@ export async function runSurvey(cfg, opts = {}) {
 const MAX_URLS = Math.min(Math.max(Number(cfg.maxUrls) || 20, 1), 40);
 const SHOT_MAX_H = Math.min(Math.max(Number(cfg.shotMaxHeight) || 6000, 900), 8000);
 const BUDGET_MS = Math.min(Number(cfg.budgetMs) || 240000, 600000);
+// Chế độ nhẹ (Vercel/Lambda: Chromium một tiến trình, ít bộ nhớ): không tải ảnh/phông, cuộn ít, bỏ ảnh mobile
+const LIGHT = cfg.light ?? IS_SERVERLESS;
 const MAX_REQUESTS = 4000;
 const started = Date.now();
 const timeLeft = () => BUDGET_MS - (Date.now() - started);
@@ -111,7 +113,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   } catch (e) { result.sitemap = { status: 'error', error: e.message }; }
 
   log('sitemap', result.sitemap.status, discovered.size);
-  const browser = await launchChromium();
+  let browser = await launchChromium();
   let requestCount = 0;
   const guard = async (route) => {
     const req = route.request();
@@ -124,7 +126,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     // điều hướng khung chính chỉ trong host được duyệt
     if (req.isNavigationRequest() && req.frame().parentFrame() === null && !sameSite(req.url(), rootHost)) { result.blocked_requests++; return route.abort('blockedbyclient'); }
     try { await assertPublicHost(u.hostname); } catch { result.blocked_requests++; return route.abort('blockedbyclient'); }
-    if (req.resourceType() === 'media') return route.abort();
+    if (req.resourceType() === 'media' || (LIGHT && (req.resourceType() === 'image' || req.resourceType() === 'font'))) return route.abort();
     return route.continue();
   };
   const mkContext = async (opts) => {
@@ -133,28 +135,42 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     await ctx.route('**/*', guard);
     return ctx;
   };
-  const desktop = await mkContext({ viewport: { width: 1366, height: 900 } });
-  const mobile = await mkContext({ ...(await devicesPreset('iPhone 13')) });
+  let desktop; let mobile;
+  const openContexts = async () => {
+    desktop = await mkContext({ viewport: { width: 1366, height: 900 } });
+    mobile = LIGHT ? null : await mkContext({ ...(await devicesPreset('iPhone 13')) });
+  };
+  await openContexts();
+  // Trình duyệt sập (trang quá nặng) → mở lại để quét tiếp
+  const ensureBrowser = async () => {
+    if (browser.isConnected()) return;
+    log('mở lại trình duyệt sau khi sập');
+    await browser.close().catch(() => {});
+    browser = await launchChromium();
+    await openContexts();
+  };
+  const CRASH = /Target page, context or browser has been closed|Target closed|browser has disconnected|has crashed|Page crashed/i;
 
   const visited = new Set();
   let shot = 0;
-  async function visit(url, template, kind) {
+  async function visit(url, template, kind, retry = true) {
     const vkey = url.replace(/^(https?:\/\/)www\./, '$1');
     if (visited.has(vkey) || timeLeft() < 15000) return null;
     visited.add(vkey);
     log('visit', url);
     const page = { url, template, kind, captured_at: new Date().toISOString(), features: [] };
+    await ensureBrowser();
     const p = await desktop.newPage();
     try {
       const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
       page.status = resp?.status() ?? null;
       if (page.status >= 400) throw new Error(`HTTP ${page.status}`);
       await p.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
-      await p.evaluate(async () => {
+      await p.evaluate(async (maxSteps) => {
         const step = Math.max(400, window.innerHeight * 0.9);
-        for (let y = 0, i = 0; y < document.documentElement.scrollHeight && i < 14; y += step, i++) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 200)); }
+        for (let y = 0, i = 0; y < document.documentElement.scrollHeight && i < maxSteps; y += step, i++) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 200)); }
         window.scrollTo(0, 0);
-      }).catch(() => {});
+      }, LIGHT ? 5 : 14).catch(() => {});
       await p.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
       await p.waitForTimeout(800);
       const finalUrl = p.url();
@@ -178,19 +194,28 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       const bufD = await p.screenshot({ type: 'jpeg', quality: 55, clip: { x: 0, y: 0, width: 1366, height: Math.max(height, 900) }, fullPage: true, timeout: 15000 });
       fs.writeFileSync(dFile, bufD);
       page.desktop = { file: path.basename(dFile), hash: sha256(bufD), viewport: '1366x900' };
-      const pm = await mobile.newPage();
-      try {
+      const pm = mobile ? await mobile.newPage() : null;
+      if (pm) try {
         await pm.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         await pm.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
         const bufM = await pm.screenshot({ type: 'jpeg', quality: 55, timeout: 15000 });
         const mFile = path.join(cfg.assetDir, `${n}-mobile.jpg`);
         fs.writeFileSync(mFile, bufM);
         page.mobile = { file: path.basename(mFile), hash: sha256(bufM), viewport: '390x844' };
-      } catch (e) { page.mobile_error = e.message.split('\n')[0]; } finally { await pm.close(); }
+      } catch (e) { page.mobile_error = e.message.split('\n')[0]; } finally { await pm.close().catch(() => {}); }
     } catch (e) {
       page.error = e.message.split('\n')[0];
+      if (CRASH.test(page.error)) {
+        page.error = 'Trình duyệt quét bị quá tải khi mở trang này (trang quá nặng cho máy chủ đám mây)';
+        if (retry && timeLeft() > 40000) { // mở lại trình duyệt, thử lại một lần
+          await p.close().catch(() => {});
+          visited.delete(vkey);
+          await ensureBrowser().catch(() => {});
+          return visit(url, template, kind, false);
+        }
+      }
       result.errors.push({ url, error: page.error });
-    } finally { await p.close(); }
+    } finally { await p.close().catch(() => {}); }
     result.pages.push(page);
     return page;
   }
@@ -215,7 +240,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       await visit(s.url, s.template, s.kind);
     }
   } finally {
-    await browser.close();
+    await browser.close().catch(() => {});
   }
   log('done', visited.size);
   result.discovered = [...discovered.values()];
