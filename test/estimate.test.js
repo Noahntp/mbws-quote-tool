@@ -45,3 +45,22 @@ test('mức may đo vượt gói thì gói không phù hợp', () => {
   assert.equal(cov('ZERO 1', 'DESIGN_LEVEL', 3), 'not_included');
   assert.equal(cov('ZERO 6', 'DESIGN_LEVEL', 3), 'included');
 });
+
+test('dung lượng hosting: gói gồm sẵn GB, vượt thì mua thêm theo GB; "Theo dự án" tính như mức cao nhất', async () => {
+  const { gbOf, applyPackage } = await import('../server/estimate.js');
+  assert.equal(gbOf('0.5 GB'), 0.5); assert.equal(gbOf('4,5 GB'), 4.5); assert.equal(gbOf('Theo dự án'), null);
+  const pk = { ...packages, addons: [...packages.addons, { code: 'ADD_HOSTING_1GB', name: 'Thêm 1 GB hosting', price: 500000, unit: '1 GB', recurring: 'yearly' }] };
+  const f = feature('HOSTING_STORAGE');
+  const c = (pkg, q) => coverage(catalog, pk, findPackage(pk, pkg), f, q);
+  assert.equal(c('ZERO 2', 1).status, 'included');
+  const z1 = c('ZERO 1', 2); // gói 0,5 GB, cần 2 GB → mua thêm 2 GB (làm tròn lên)
+  assert.equal(z1.status, 'paid_addon'); assert.equal(z1.addons[0].qty, 2);
+  assert.equal(c('HERO 5', 8).status, 'included');
+  const h7 = c('HERO 7', 10); // "Theo dự án" → như 8 GB
+  assert.equal(h7.status, 'paid_addon'); assert.equal(h7.addons[0].qty, 2);
+  assert.equal(coverage(catalog, packages, findPackage(packages, 'ZERO 1'), f, 3).status, 'not_included'); // chưa có giá mua thêm → không tự cộng 0đ
+  // không có đầu việc nhưng vẫn cộng add-on khi áp gói
+  const reqs = [{ id: 1, code: 'R1', feature: 'HOSTING_STORAGE', quantity: 3, decision: 'include' }];
+  const ap = applyPackage(catalog, pk, findPackage(pk, 'ZERO 1'), [], reqs);
+  assert.deepEqual(ap.addons.map((a) => [a.code, a.qty]), [['ADD_HOSTING_1GB', 3]]);
+});

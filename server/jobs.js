@@ -55,7 +55,8 @@ export async function processNext() {
     const r = await one('SELECT * FROM analysis_runs WHERE id=?', job.run_id);
     console.log(`[quét] bắt đầu #${r.id} ${r.url}`);
     const result = await executeRun(r);
-    console.log(`[quét] xong #${r.id}: ${result.ok ? 'ok' : 'lỗi ' + (result.fatal || '')}, ${(result.pages || []).length} trang, ${Math.round((Date.now() - t0) / 1000)}s`);
+    const h0 = result.pages?.[0];
+    console.log(`[quét] xong #${r.id}: ${result.ok ? 'ok' : 'lỗi ' + (result.fatal || '')}, ${(result.pages || []).length} trang, ${(result.discovered || []).length} URL, ${Math.round((Date.now() - t0) / 1000)}s${h0 ? ` | trang chủ: ${h0.status ?? '-'} "${(h0.title || '').slice(0, 60)}" ${h0.final_url || ''}${h0.blocked ? ' [chặn: ' + h0.blocked + ']' : ''}` : ''}`);
     await ingest(r, result);
     const st = (await one('SELECT status FROM analysis_runs WHERE id=?', job.run_id))?.status;
     await run('UPDATE job_queue SET status=?, locked_at=NULL WHERE run_id=?', st === 'failed' ? 'failed' : 'done', job.run_id);
@@ -155,7 +156,8 @@ export async function ingest(job, res) {
     for (const p of res.pages || []) {
       const asset = p.desktop ? `runs/${job.id}/${p.desktop.file}` : null;
       if (p.error || p.blocked) {
-        await addEv({ url: p.url, captured_at: p.captured_at, kind: 'unreadable', detail: p.error || 'CAPTCHA / bị chặn — cần bổ sung bằng chứng thủ công, không kết luận là không có', verification: 'unverified' });
+        if (p.blocked && p.desktop) await storeAsset(asset, path.join(dir, p.desktop.file)); // giữ ảnh trang chặn làm bằng chứng
+        await addEv({ url: p.url, captured_at: p.captured_at, asset_path: p.blocked && p.desktop ? asset : null, asset_hash: p.blocked ? p.desktop?.hash : null, kind: 'unreadable', detail: p.error || `Trang chặn máy quét (${p.blocked}) — cần bổ sung bằng chứng thủ công, không kết luận là không có`, verification: 'unverified' });
         continue;
       }
       if (p.desktop) await storeAsset(asset, path.join(dir, p.desktop.file));

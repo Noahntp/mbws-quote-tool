@@ -109,3 +109,14 @@ test('Link đăng nhập sang hệ thống ngoài chỉ là có thể có', asyn
   const { f } = await detect('<a href="https://id.other-service.test/login">Đăng nhập</a>');
   notTicked(f, 'MEMBER_LOGIN');
 });
+
+test('nhận diện trang chặn máy quét (CAPTCHA / chống bot), không nhầm trang thường có reCAPTCHA ở form', async () => {
+  const { botWall } = await import('../server/crawler/worker.js');
+  assert.ok(botWall({ url: 'https://www.alibaba.com/_____tmd_____/punish?x5secdata=abc', title: '', text: '' }));
+  assert.ok(botWall({ url: 'https://x.vn/', title: 'Just a moment...', text: 'checking your browser before accessing x.vn' }));
+  assert.ok(botWall({ url: 'https://x.vn/', title: 'x', text: 'sorry, we have detected unusual traffic from your network. please slide to verify' }));
+  assert.ok(botWall({ url: 'https://x.vn/', title: 'x', text: 'short', marker: true }));
+  const normal = 'trang chủ nhà hàng thực đơn đặt bàn liên hệ '.repeat(200) + ' form liên hệ có captcha';
+  assert.equal(botWall({ url: 'https://x.vn/', title: 'Nhà hàng ABC', text: normal }), null);
+  assert.equal(botWall({ url: 'https://x.vn/lien-he', title: 'Liên hệ', text: normal, marker: false }), null);
+});

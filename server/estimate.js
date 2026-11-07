@@ -64,6 +64,8 @@ const maxNumber = (v) => {
   const n = Math.max(...nums.map((s) => Number(s.replace(/\./g, ''))));
   return /\+/.test(v) ? Infinity : n;
 };
+// "0.5 GB", "4,5 GB" → số GB (dấu chấm/phẩy là phần thập phân, khác maxNumber); "Theo dự án" → null
+export const gbOf = (v) => { const m = String(v ?? '').match(/(\d+(?:[.,]\d+)?)\s*GB/i); return m ? Number(m[1].replace(',', '.')) : null; };
 const levelOf = (v) => { const m = String(v || '').match(/[MS](\d)/); return m ? Number(m[1]) : null; };
 
 /** Mức may đo M1–M8 của gói (theo bảng tiêu chí matbao.ws). */
@@ -95,6 +97,17 @@ export function coverage(catalog, packagesData, ctx, feature, qty) {
     const lv = levelOf(criterionValue(ctx, 'Bố cục trang web'));
     const cap = catalog.sitemap_capacity[String(lv)] ?? 0;
     return qty <= cap ? { status: 'included', capacity: cap, note: `Sitemap S${lv} (~${cap} mẫu trang)` } : { status: 'capacity', capacity: cap, over: qty - cap, note: `Sitemap S${lv} ~${cap} mẫu trang, vượt ${qty - cap}` };
+  }
+  if (feature.capacity === 'hosting') {
+    // Gói ZERO/HERO 1–5 ghi rõ GB; HERO 6–8 "Theo dự án" → tính như mức cao nhất có niêm yết, phần vượt mua thêm
+    const listed = gbOf(ctx.pkg.hosting);
+    const cap = listed ?? Math.max(0, ...packageList(packagesData).map((c) => gbOf(c.pkg.hosting) ?? 0));
+    const capNote = listed != null ? `Gói gồm ${cap} GB hosting` : `Hosting "${ctx.pkg.hosting || 'theo dự án'}" — tính như ${cap} GB`;
+    if (qty <= cap) return { status: 'included', capacity: cap, note: capNote };
+    const ad = addons.find((a) => a.code === 'ADD_HOSTING_1GB');
+    const n = Math.ceil(qty - cap - 1e-9);
+    if (!ad) return { status: 'not_included', capacity: cap, note: `${capNote}, cần ${qty} GB — chưa có giá mua thêm dung lượng` };
+    return { status: 'paid_addon', capacity: cap, addons: [{ code: ad.code, name: ad.name, qty: n, unit_price: ad.price, recurring: ad.recurring }], note: `${capNote}, cần ${qty} GB → mua thêm ${n} GB` };
   }
   if (feature.capacity === 'products' || feature.capacity === 'posts') {
     const title = feature.capacity === 'products' ? 'Số lượng sản phẩm' : 'Số lượng bài viết';
@@ -145,6 +158,15 @@ export function applyPackage(catalog, packagesData, ctx, lines, requirements) {
       continue;
     }
     out.push({ ...l, billing: c.status === 'not_included' ? 'extra' : 'package', coverage_note: c.note });
+  }
+  // Tính năng không có đầu việc (dung lượng hosting): không sinh dòng giờ công, chỉ cộng add-on khi vượt sức chứa gói
+  for (const r of requirements) {
+    if (r.decision !== 'include' || !r.feature || cov[r.feature + ':' + r.id]) continue;
+    const f = featureByCode(catalog, r.feature);
+    if (f?.capacity !== 'hosting') continue;
+    const c = coverage(catalog, packagesData, ctx, f, Number(r.quantity ?? f.default_qty ?? 1));
+    cov[r.feature + ':' + r.id] = c;
+    for (const a of c.addons || []) addons.push({ ...a, reason: `${r.code || ''} ${f.title}` });
   }
   return { lines: out, addons, coverage: cov };
 }

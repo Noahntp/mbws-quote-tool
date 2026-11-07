@@ -66,8 +66,9 @@ app.use('/api', h(async (req, res, next) => {
 
 // ---------- Danh mục, gói, cấu hình ----------
 app.get('/api/meta', h(async (req, res) => {
+  const pkgs = pkgDataWith(parseSetting(await activeSetting('policy'))?.data);
   res.json({
-    catalog: catalog(), packages: packagesData(), feature_tiers: featureTiers(catalog(), packagesData()),
+    catalog: catalog(), packages: pkgs, feature_tiers: featureTiers(catalog(), pkgs),
     rate_card: parseSetting(await activeSetting('rate_card')), policy: parseSetting(await activeSetting('policy')),
     settings: (await all('SELECT s.*, u.name approved_by_name FROM settings_versions s LEFT JOIN users u ON u.id=s.approved_by ORDER BY kind, effective_from DESC, id DESC')).map(parseSetting),
     perms: Object.fromEntries(Object.entries(PERMS).map(([k, roles]) => [k, roles.includes(req.user.role)])),
@@ -75,6 +76,14 @@ app.get('/api/meta', h(async (req, res) => {
   });
 }));
 const parseSetting = (s) => (s ? { ...s, data: JSON.parse(s.data_json), data_json: undefined } : null);
+// Giá thêm 1 GB hosting/năm: matbao.ws chưa niêm yết → lấy từ chính sách giá (giả định, quản lý giá sửa được).
+const HOSTING_GB_PRICE_DEFAULT = 500000;
+function pkgDataWith(policy) {
+  const d = packagesData();
+  const price = Number(policy?.hosting_gb_price_year ?? HOSTING_GB_PRICE_DEFAULT);
+  const ad = { code: 'ADD_HOSTING_1GB', name: 'Thêm 1 GB dung lượng hosting (gia hạn hằng năm)', price, unit: '1 GB', recurring: 'yearly', source: 'Giả định nội bộ (matbao.ws chưa niêm yết) — sửa ở Đơn giá & chính sách' };
+  return { ...d, addons: [...(d.addons || []).filter((a) => a.code !== ad.code), ad] };
+}
 
 app.post('/api/settings', h(async (req, res) => {
   need(req, 'settings.edit');
@@ -211,7 +220,7 @@ app.post('/api/projects/:id/quick-feature', h(async (req, res) => {
     }
     // Nhập số lượng = đã trả lời câu hỏi "bao nhiêu" của mục đó
     if (feature === 'DESIGN_LEVEL' && quantity != null && rid) await run("UPDATE requirements SET source_kind='client' WHERE id=?", rid);
-    if (include && quantity != null && rid && ['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS'].includes(feature)) {
+    if (include && quantity != null && rid && ['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE'].includes(feature)) {
       await run("UPDATE questions SET answer=?, status='answered' WHERE requirement_id=? AND status='open' AND blocking=1", `Số lượng: ${quantity} (nhập ở báo giá nhanh)`, rid);
     }
     await syncAutoLines(pid);
@@ -491,7 +500,7 @@ async function buildInput(pid) {
   // Chưa bấm "Sinh dự toán" → dùng định mức chuẩn tạm thời để luôn có giá xem trước.
   const provisionalLines = !dbLines.length && reqs.some((r) => r.decision === 'include');
   if (provisionalLines) lines = buildAutoLines(catalog(), reqs).map((l) => ({ ...l, provisional: true }));
-  const pkgData = packagesData();
+  const pkgData = pkgDataWith(pol?.data);
   let pkg = null; let addons = []; let applied = null;
   const mode = pricing.mode === 'cost' ? 'cost' : 'package';
   const rates = rc?.data || {}; const policy = pol?.data || {};
@@ -571,10 +580,11 @@ async function projectState(pid) {
 // ---------- Giá sơ bộ theo web mẫu + phát sinh ----------
 // Tính giá cho một tập yêu cầu giả định (không ghi CSDL). autoPackage=true: luôn chọn gói rẻ nhất phù hợp.
 async function simulatePrice(pid, b, reqs, { autoPackage = false } = {}) {
-  const cat = catalog(); const pkgData = packagesData();
+  const cat = catalog(); const pkgData = pkgDataWith(b.input.policy);
   const manual = (await all("SELECT * FROM estimate_lines WHERE project_id=? AND source='manual'", pid))
     .map((l) => ({ id: l.id, code: l.code, title: l.title, group: l.grp, role: l.role, unit: l.unit, qty: l.qty, o: l.o, m: l.m, p: l.p, source: 'manual', billing_override: l.billing_override, include: !!l.include }));
-  let lines = [...buildAutoLines(cat, reqs), ...manual];
+  // Chưa chọn tính năng nào → không tính đầu việc nền (giống giá chính thức = 0), tránh giá gốc ảo và "−12 tr" ở mọi mục
+  let lines = [...(reqs.some((r) => r.decision === 'include') ? buildAutoLines(cat, reqs) : []), ...manual];
   const common = { rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks };
   const mode = b.input.mode;
   let code = mode === 'package' && !autoPackage ? b.pricing.package_code : null;
@@ -592,7 +602,7 @@ async function simulatePrice(pid, b, reqs, { autoPackage = false } = {}) {
   return { price: Number(r.price_net ?? 0), package: code, package_name: pkg?.name || null, ok: r.ok !== false };
 }
 
-const QTY_FEATURES = new Set(['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'DESIGN_LEVEL']);
+const QTY_FEATURES = new Set(['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE', 'DESIGN_LEVEL']);
 app.get('/api/projects/:id/quick', h(async (req, res) => {
   const pid = Number(req.params.id);
   const b = await buildInput(pid);
@@ -658,7 +668,7 @@ app.get('/api/projects/:id/recommend', h(async (req, res) => {
   const reqs = b.reqs;
   let lines = (await all('SELECT * FROM estimate_lines WHERE project_id=?', pid)).map((l) => ({ ...l, group: l.grp, include: !!l.include }));
   if (!lines.length) lines = buildAutoLines(catalog(), reqs); // chưa sinh dự toán thì dùng định mức chuẩn để so sánh
-  res.json(recommendPackages(catalog(), packagesData(), { requirements: reqs, lines, rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks, priceHint: complexityHint(b.pricing, reqs) }));
+  res.json(recommendPackages(catalog(), pkgDataWith(b.input.policy), { requirements: reqs, lines, rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks, priceHint: complexityHint(b.pricing, reqs) }));
 }));
 
 // ---------- Phiên bản, duyệt, xuất ----------

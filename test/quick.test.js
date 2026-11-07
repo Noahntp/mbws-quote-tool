@@ -73,3 +73,30 @@ test('giá sơ bộ theo web mẫu, rồi phát sinh khi chọn thêm', async ()
   assert.equal(q.extra, 0);
   assert.equal(q.changes.length, 0);
 });
+
+test('quét không nhận ra tính năng nào: không có giá gốc ảo, mục chọn thêm không bị âm', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['web-trong.vn'] });
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId);
+  await ingest({ id: runId, project_id: id, url: 'https://web-trong.vn/' }, { ok: true, input: 'https://web-trong.vn/', sitemap: {}, coverage: { discovered: 0 }, templates: [], pages: [] });
+  const q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.baseline.count, 0);
+  assert.equal(q.baseline.price, 0);
+  assert.equal(q.current.price, 0);
+  assert.equal(q.extra, 0);
+  for (const [code, m] of Object.entries(q.marginal)) assert.ok(m.delta >= 0, `${code}: ${m.delta}`);
+  assert.ok(q.marginal.SEARCH.delta > 0);
+});
+
+test('dung lượng hosting vượt gói → cộng phí mua thêm GB (giá theo chính sách)', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { brief: 'web giới thiệu, form liên hệ' });
+  const meta = (await api('/api/meta')).json;
+  assert.equal(meta.packages.addons.find((a) => a.code === 'ADD_HOSTING_1GB')?.price, 500000);
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'CONTACT_FORM', include: true });
+  const before = (await api(`/api/projects/${id}`)).json.preview;
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'HOSTING_STORAGE', include: true, quantity: 20 });
+  const after = (await api(`/api/projects/${id}`)).json.preview;
+  const ad = (after.addons || []).find((a) => a.code === 'ADD_HOSTING_1GB');
+  assert.ok(ad && ad.qty > 0, 'phải có add-on hosting');
+  assert.ok(Number(after.price_net) > Number(before.price_net));
+});

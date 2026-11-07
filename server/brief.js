@@ -52,13 +52,15 @@ function ruleBased(catalog, brief) {
   const posts = num(/(\d[\d.,]*)\s*(bai viet|bai)/);
   const pages = num(/(\d+)\s*(mau trang|trang giao dien|template|trang)/);
   const langs = num(/(\d+)\s*ngon ngu/);
+  const gbm = t.match(/(\d+(?:[.,]\d+)?)\s*gb\b/); // "10GB hosting", "2,5 gb"
+  const gb = gbm ? Number(gbm[1].replace(',', '.')) : null;
   const setQty = (feature, q) => {
     if (q == null) return;
     const f = catalog.features.find((x) => x.code === feature);
     const ex = out.find((o) => o.feature === feature);
     if (ex) ex.quantity = q; else out.push({ feature, title: f.title, quantity: q, wanted: true, evidence: `${q} ${f.unit}`, acceptance: null });
   };
-  setQty('DATA_PRODUCTS', prods); setQty('DATA_POSTS', posts); setQty('PAGES', pages);
+  setQty('DATA_PRODUCTS', prods); setQty('DATA_POSTS', posts); setQty('PAGES', pages); setQty('HOSTING_STORAGE', gb);
   if (langs && langs > 1) setQty('MULTILANG', langs - 1);
   return out;
 }

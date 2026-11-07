@@ -16,6 +16,23 @@ const UA_TOKEN = 'MBWS-QuoteBot';
 const USER_AGENT_SUFFIX = ` ${UA_TOKEN}/0.1 (+khao sat bao gia noi bo)`;
 
 /** Quét một web mẫu. Trả về manifest dẫn chứng; ảnh chụp ghi vào cfg.assetDir. */
+
+// ---------- Nhận diện trang chặn bot (CAPTCHA / tường lửa chống bot) ----------
+// Web lớn (alibaba, shopee...) thường trả trang này cho IP máy chủ đám mây. Không vượt qua — chỉ báo rõ.
+const WALL_URL = /_____tmd_____|\/punish\b|captcha|\/cdn-cgi\/challenge|__cf_chl|validate\.perfdrive|\/sorry\/index/i;
+const WALL_TITLE = /captcha|just a moment|attention required|access denied|are you a robot|security check|interception|verif(y|ying) you are human|robot check|request blocked|bị chặn|xác minh/i;
+const WALL_TEXT = /captcha|verify you are human|are you a robot|unusual traffic|slide to verify|press (&|and) hold|access denied|request (was )?blocked|checking your browser|enable javascript and cookies to continue|xác minh bạn không phải|lưu lượng truy cập bất thường/i;
+// Dấu hiệu DOM đặc trưng của trang chặn (không tính reCAPTCHA trong form liên hệ thông thường)
+const WALL_MARKER_JS = () => !!document.querySelector('#px-captcha, #challenge-form, .cf-challenge, #cf-challenge-running, [id^="nc_1_"], .nc-container, #nocaptcha, iframe[src*="captcha-delivery"], iframe[src*="/punish"], #baxia-punish');
+export function botWall({ url = '', title = '', text = '', marker = false }) {
+  const len = text.length;
+  if (WALL_URL.test(url)) return 'chuyển tới trang xác minh';
+  if (marker && len < 5000) return 'CAPTCHA chống bot';
+  if (WALL_TITLE.test(title) && len < 5000) return `trang "${title.slice(0, 40)}"`;
+  if (WALL_TEXT.test(text) && len < 3000) return 'yêu cầu xác minh không phải robot';
+  return null;
+}
+
 export async function runSurvey(cfg, opts = {}) {
 const MAX_URLS = Math.min(Math.max(Number(cfg.maxUrls) || 20, 1), 40);
 const SHOT_MAX_H = Math.min(Math.max(Number(cfg.shotMaxHeight) || 6000, 900), 8000);
@@ -144,9 +161,10 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       if (!sameSite(finalUrl, rootHost)) throw new Error(`Chuyển hướng ra ngoài phạm vi: ${finalUrl}`);
       page.final_url = finalUrl;
       const text = (await p.evaluate(() => document.body?.innerText || '')).toLowerCase();
-      if (/captcha|cf-challenge|just a moment|verify you are human|access denied/.test(text) && text.length < 2000) {
-        page.blocked = 'captcha_or_waf';
-        page.features.push({ feature: null, detail: 'Trang yêu cầu CAPTCHA / bị chặn — không vượt qua', verification: 'unverified' });
+      const wall = botWall({ url: finalUrl, title: await p.title().catch(() => ''), text, marker: await p.evaluate(WALL_MARKER_JS).catch(() => false) });
+      if (wall) {
+        page.blocked = wall;
+        page.features.push({ feature: null, detail: `Trang chặn máy quét (${wall}) — không vượt qua`, verification: 'unverified' });
       }
       const d = await p.evaluate(detectInPage);
       page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind; page.metrics = d.metrics;
@@ -177,8 +195,13 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     return page;
   }
 
+  let homeFail = null;
   try {
-    await visit(start, 'home', 'home');
+    const home = await visit(start, 'home', 'home');
+    // Trang chủ bị chặn / không mở được → dừng: kết quả rỗng sẽ cho giá sai (thường gặp khi quét từ máy chủ đám mây)
+    if (home?.blocked) homeFail = `Web mẫu chặn máy quét (${home.blocked}). Thử "Quét lại" sau, quét từ máy chạy local, hoặc tick tính năng tay.`;
+    else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}`;
+    if (homeFail) return finish(false, homeFail);
     // mở rộng khám phá qua một số trang menu khác loại
     const firstGroups = groupTemplates([...discovered.values()]).filter((g) => g.template !== 'home');
     for (const g of sampleUrls(firstGroups, Math.min(5, MAX_URLS - 1), 1)) {

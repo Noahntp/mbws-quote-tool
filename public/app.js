@@ -212,9 +212,9 @@ function packageCapacity(code) {
   const crit = x.l.criteria.find((c) => /bố cục trang web/i.test(c.title));
   const lv = (String(x.p.features?.[crit?.no] || '').match(/S(\d)/) || [])[1];
   const pages = lv ? S.meta.catalog.sitemap_capacity[lv] : null;
-  return { pages, products: x.p.products, posts: x.p.posts, sitemap: x.p.features?.[crit?.no] };
+  return { pages, products: x.p.products, posts: x.p.posts, hosting: x.p.hosting, sitemap: x.p.features?.[crit?.no] };
 }
-const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm cần nhập'], ['DATA_POSTS', 'Số bài viết cần nhập']];
+const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm cần nhập'], ['DATA_POSTS', 'Số bài viết cần nhập'], ['HOSTING_STORAGE', 'Dung lượng hosting (GB)']];
 
 function renderQuick() {
   const P = S.project; const p = P.project; const r = P.preview; const cat = S.meta.catalog;
@@ -261,8 +261,10 @@ function renderQuick() {
   const cap = pkgCode ? packageCapacity(pkgCode) : null;
   const qty = ([code, label]) => {
     const rq = reqBy[code]; const on = rq?.decision === 'include';
-    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : 'không';
-    return `<label class="f">${label}<input type="number" min="0" class="num" data-qqty="${code}" style="width:130px" value="${on ? esc(rq.quantity ?? '') : ''}" placeholder="${esc(hint)}"></label>`;
+    const gb = code === 'HOSTING_STORAGE';
+    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : gb ? (cap?.hosting ? 'gói: ' + cap.hosting : 'theo gói') : 'không';
+    const c = gb && on ? covOf(rq) : null; // dung lượng vượt gói → ghi rõ phần mua thêm
+    return `<label class="f">${label}<input type="number" min="0" ${gb ? 'step="0.5"' : ''} class="num" data-qqty="${code}" style="width:130px" value="${on ? esc(rq.quantity ?? '') : ''}" placeholder="${esc(hint)}">${c && c.status !== 'included' ? `<span class="small" style="color:var(--accent)">${esc(c.note)}</span>` : ''}</label>`;
   };
   $app.innerHTML = `
   <div class="row" style="justify-content:space-between">
@@ -277,7 +279,7 @@ function renderQuick() {
         <label class="f">Khách hàng<input data-qinfo="customer_name" value="${esc(p.customer_name || '')}"></label>
         <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
       </div>
-      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? chip('quét lỗi: ' + (ru.error || '').slice(0, 60), 'err') : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
+      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
         <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
       <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
@@ -287,7 +289,7 @@ function renderQuick() {
       ${S.quick?.baseline ? `<p class="small muted" style="margin:0 0 6px">Đã tick sẵn ${S.quick.baseline.count} tính năng thấy trên ${esc(domainLabel(S.quick.baseline.domain))}. Mỗi mục chưa chọn ghi sẵn giá cộng thêm nếu chọn.</p>` : ''}
       ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
       <div class="row">${QUICK_QTY.map(qty).join('')}</div>
-      ${cap ? `<p class="small muted" style="margin:6px 0 0">Gói <b>${esc(pkgCode)}</b> gồm: ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '')} · ${esc(cap.posts || '')}. Vượt số sản phẩm/bài viết sẽ cộng phí mua thêm.</p>` : ''}
+      ${cap ? `<p class="small muted" style="margin:6px 0 0">Gói <b>${esc(pkgCode)}</b> gồm: ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '')} · ${esc(cap.posts || '')} · hosting ${esc(cap.hosting || 'theo dự án')}. Vượt số sản phẩm/bài viết/dung lượng sẽ cộng phí mua thêm (gia hạn hằng năm).</p>` : ''}
       <p class="small muted" style="margin:12px 0 6px">Tính năng xếp theo gói matbao.ws: chọn mục ở nhóm cao hơn thì giá chuyển lên gói đó (hoặc tính thêm nếu rẻ hơn).</p>
       <div class="tiers">${featureGroups().map(tierCard).join('')}</div>
     </div>
@@ -338,6 +340,11 @@ function priceStepsHtml(P, r, pkg, running) {
       <div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>`;
   }
   const b = Q.baseline;
+  if (!b.count && !b.package) { // quét xong nhưng không nhận ra gì (web chặn máy quét / trang trống) → không bày giá gốc 0 ₫
+    const warn = `<div class="step"><div class="small muted">① Đánh giá sơ bộ web mẫu</div><p class="checks" style="margin:6px 0"><span class="warn">Không nhận ra tính năng nào trên ${esc(domainLabel(b.domain))} — web có thể chặn máy quét. Bấm <b>Quét lại</b> hoặc tick tính năng ở mục 2.</span></p></div>`;
+    if (!P.requirements.some((x) => x.decision === 'include')) return warn;
+    return `${warn}<div class="step total"><div class="small muted">Tổng báo giá${pkg ? ` · gói ${esc(pkg.code)}` : ''}</div><div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div></div>`;
+  }
   const ch = Q.changes || [];
   const tierOf = (code) => { const t = S.meta.feature_tiers?.[code]; return t && !t.all ? ` <span class="muted">· cần ${esc(t.code)}</span>` : !t ? ' <span class="muted">· ngoài gói</span>' : ''; };
   const line = (c) => c.kind === 'added' ? `<li>+ ${esc(c.title)}${Number(c.to) > 1 ? ` (${num(c.to, 0)})` : ''}${tierOf(c.code)}</li>` : c.kind === 'removed' ? `<li>− Bỏ ${esc(c.title)}</li>` : `<li>${esc(c.title)}: ${num(c.from, 0)} → ${num(c.to, 0)}</li>`;
@@ -719,7 +726,7 @@ async function viewPackages() {
 function viewSettings() {
   const m = S.meta; const cat = m.catalog;
   const rc = m.rate_card; const pol = m.policy;
-  const polFields = [['target_margin_pct', 'Biên mục tiêu %'], ['min_margin_pct', 'Biên tối thiểu %'], ['vat_pct', 'VAT %'], ['overhead_pct', 'Chi phí chung % (nếu đơn giá chưa gồm)'], ['package_cost_pct', 'Chi phí gói chuẩn % giá niêm yết'], ['sales_max_discount_pct', 'Sales giảm tối đa %'], ['rounding_step', 'Bước làm tròn (VND)'], ['quote_valid_days', 'Hiệu lực báo giá (ngày)']];
+  const polFields = [['target_margin_pct', 'Biên mục tiêu %'], ['min_margin_pct', 'Biên tối thiểu %'], ['vat_pct', 'VAT %'], ['overhead_pct', 'Chi phí chung % (nếu đơn giá chưa gồm)'], ['package_cost_pct', 'Chi phí gói chuẩn % giá niêm yết'], ['sales_max_discount_pct', 'Sales giảm tối đa %'], ['hosting_gb_price_year', 'Giá thêm 1 GB hosting / năm (VND, giả định)'], ['rounding_step', 'Bước làm tròn (VND)'], ['quote_valid_days', 'Hiệu lực báo giá (ngày)']];
   const today = new Date().toISOString().slice(0, 10);
   $app.innerHTML = `<h1>Đơn giá & chính sách</h1>
   <p class="muted">Mỗi thay đổi tạo phiên bản mới có ngày hiệu lực. Báo giá đã duyệt giữ snapshot giá trị cũ nên không bị ảnh hưởng. ${can('settings.edit') ? '' : 'Chỉ quản lý giá / quản trị được sửa.'}</p>

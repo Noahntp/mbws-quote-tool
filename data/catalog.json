@@ -91,6 +91,7 @@
     { "code": "ERP_INTEGRATION", "title": "Tích hợp ERP/CRM/Core API", "unit": "kết nối", "default_qty": 1, "criteria": ["May đo quy trình đặc thù"], "items": [{ "code": "INT_ERP" }, { "code": "QA_FLOW" }], "questions": [{ "text": "Tên hệ thống ERP/CRM, tài liệu API & phiên bản, chiều đồng bộ, môi trường sandbox, đơn vị cấp tài khoản?", "blocking": true }] },
     { "code": "DATA_PRODUCTS", "title": "Nhập dữ liệu sản phẩm", "unit": "sản phẩm", "default_qty": 50, "capacity": "products", "items": [{ "code": "DATA_IMPORT", "per": 10 }], "questions": [{ "text": "Bao nhiêu sản phẩm, biến thể? File nguồn đã sạch và có mẫu chưa? Ai chuẩn bị ảnh?", "blocking": true }] },
     { "code": "DATA_POSTS", "title": "Nhập bài viết", "unit": "bài", "default_qty": 20, "capacity": "posts", "items": [{ "code": "DATA_POST_IMPORT", "per": 20 }], "questions": [] },
+    { "code": "HOSTING_STORAGE", "title": "Dung lượng lưu trữ hosting", "unit": "GB", "default_qty": 1, "capacity": "hosting", "items": [], "questions": [{ "text": "Cần bao nhiêu GB lưu trữ (ảnh, video, tài liệu tải lên)? Dự kiến tăng thêm bao nhiêu mỗi năm?", "blocking": false }] },
     { "code": "DATA_MIGRATION", "title": "Chuyển dữ liệu từ web cũ", "unit": "bản ghi", "default_qty": 100, "criteria": ["Nhập liệu sản phẩm lên website từ Website cũ"], "items": [{ "code": "DATA_MIGRATE", "per": 100 }], "questions": [{ "text": "Web cũ chạy nền tảng gì? Có quyền truy cập CSDL/export? Cần giữ URL cũ (redirect 301)?", "blocking": true }] }
   ],
   "general_questions": [
