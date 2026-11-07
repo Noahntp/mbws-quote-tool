@@ -1,0 +1,46 @@
+[
+  {
+    "url": "https://pizza4ps.com",
+    "note": "Nhà hàng, WordPress. Kiểm tra tay 2026-11-07: .fb-customerchat có; RESERVATION → booking.pizza4ps.com; DELIVERY → delivery.pizza4ps.com (hệ thống riêng); không có ô tìm kiếm/form.",
+    "expect": {
+      "MESSENGER": true, "BOOKING": true, "MULTILANG": true, "BLOG": true, "PRODUCT_CATALOG": true, "SOCIAL": true, "ANALYTICS": true,
+      "CART": false, "SEARCH": false, "CONTACT_FORM": false, "CHAT_ZALO": false, "MEMBER_LOGIN": false, "FILTER": false,
+      "LOYALTY": false, "PAYMENT_ONLINE": false, "AI_ASSISTANT": false
+    }
+  },
+  {
+    "url": "https://www.bachhoaxanh.com",
+    "note": "Siêu thị online, Next.js. Ô tìm kiếm là div#input_open_search; nút 'Mua ngay' trên từng sản phẩm; nút 'Bộ lọc' ở trang danh mục; /dang-nhap; tích điểm chỉ là bài viết nói về app.",
+    "expect": {
+      "CART": true, "SEARCH": true, "FILTER": true, "MEMBER_LOGIN": true, "PRODUCT_CATALOG": true, "CHAT_ZALO": true,
+      "PHONE_CALL": true, "SOCIAL": true, "ANALYTICS": true, "MAP": true, "BLOG": true,
+      "LOYALTY": false, "MULTILANG": false, "BOOKING": false, "MESSENGER": false, "AI_ASSISTANT": false
+    }
+  },
+  {
+    "url": "https://worldchefs.org",
+    "note": "Hiệp hội, WordPress. Ô tìm kiếm tin, bộ lọc tin theo danh mục (checkbox), /login có ô mật khẩu, GTranslate đổi ngôn ngữ; shop ở tên miền con riêng; link redeem.mementophoto.ai KHÔNG phải Messenger.",
+    "expect": {
+      "SEARCH": true, "FILTER": true, "MEMBER_LOGIN": true, "CONTACT_FORM": true, "MAP": true, "PHONE_CALL": true,
+      "SOCIAL": true, "ANALYTICS": true, "BLOG": true, "MULTILANG": true,
+      "CART": false, "MESSENGER": false, "CHAT_ZALO": false, "BOOKING": false, "AI_ASSISTANT": false, "LOYALTY": false
+    }
+  },
+  {
+    "url": "https://www.vinamilk.com.vn",
+    "note": "Thương mại điện tử doanh nghiệp. Script zaloapp chỉ là pixel đo quảng cáo, không phải chat Zalo; không có đăng nhập; trang collections không có bộ lọc; /vinamilk-rewards là chương trình tích điểm.",
+    "expect": {
+      "CART": true, "PRODUCT_CATALOG": true, "SEARCH": true, "MULTILANG": true, "BLOG": true, "LOYALTY": true,
+      "CONTACT_FORM": true, "SOCIAL": true, "ANALYTICS": true,
+      "CHAT_ZALO": false, "MEMBER_LOGIN": false, "FILTER": false, "BOOKING": false, "MESSENGER": false
+    }
+  },
+  {
+    "url": "https://www.matbao.ws",
+    "note": "Web dịch vụ (SPA). Chữ 'Giỏ hàng', 'Chat Facebook Messenger', 'tích điểm', 'đặt lịch' chỉ nằm trong bảng so sánh gói → không phải tính năng của web. Trang /blogs có ô 'Tìm kiếm bài viết'.",
+    "expect": {
+      "CHAT_ZALO": true, "PHONE_CALL": true, "SOCIAL": true, "ANALYTICS": true, "BLOG": true, "CONTACT_FORM": true, "MEMBER_LOGIN": true, "SEARCH": true,
+      "CART": false, "MESSENGER": false, "LOYALTY": false, "BOOKING": false, "MULTILANG": false, "AI_ASSISTANT": false
+    }
+  }
+]

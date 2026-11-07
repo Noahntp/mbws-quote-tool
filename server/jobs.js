@@ -94,22 +94,27 @@ export function ingest(job, res) {
     }
     // Khối lượng suy luận từ nhóm URL
     const tpl = res.templates || [];
-    const distinct = new Set(tpl.filter((t) => !['policy', 'search'].includes(t.kind)).map((t) => (t.kind === 'other' ? 'other' : t.template)));
+    // nhóm URL "phẳng" (không có chữ san-pham trong đường dẫn) nhưng nội dung là trang sản phẩm → coi là chi tiết sản phẩm
+    const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : t.kind === 'other' ? 'other' : t.template);
+    const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart'].includes(t.kind)).map(tplKey));
     const quantities = {};
     if (distinct.size) {
       const code = addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${distinct.size} nhóm mẫu trang: ${[...distinct].join(', ')} (từ ${res.coverage?.discovered ?? 0} URL phát hiện)`, verification: 'inferred' });
       featureEv.PAGES = { codes: [code], best: 'inferred' };
       quantities.PAGES = distinct.size;
     }
-    const prod = tpl.find((t) => t.template === 'product:detail');
-    if (prod?.url_count) {
-      const code = addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prod.url_count} URL chi tiết sản phẩm (sitemap/liên kết) — ước lượng, cần khách xác nhận`, verification: 'inferred' });
-      featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prod.url_count;
+    const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (t.url_count || 0), 0);
+    const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail');
+    const prodCount = Math.max(prodByTpl, res.sitemap?.product_urls || 0);
+    if (prodCount) {
+      const how = (res.sitemap?.product_urls || 0) >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
+      const code = addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — chỉ để tham khảo, khách quyết định số cần nhập`, verification: 'inferred' });
+      featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prodCount;
     }
-    const posts = tpl.find((t) => t.template === 'blog:detail');
-    if (posts?.url_count) {
-      const code = addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${posts.url_count} URL bài viết — chỉ là số trên web mẫu, khách quyết định số cần nhập`, verification: 'inferred' });
-      featureEv.DATA_POSTS = { codes: [code], best: 'inferred' }; quantities.DATA_POSTS = posts.url_count;
+    const postCount = Math.max(sumUrls((t) => t.template === 'blog:detail'), res.sitemap?.post_urls || 0);
+    if (postCount) {
+      const code = addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu — chỉ để tham khảo, khách quyết định số cần nhập`, verification: 'inferred' });
+      featureEv.DATA_POSTS = { codes: [code], best: 'inferred' }; quantities.DATA_POSTS = postCount;
     }
 
     // Yêu cầu: cập nhật dẫn chứng nếu đã có, tạo mới ở trạng thái chờ khách quyết định

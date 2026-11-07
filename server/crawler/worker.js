@@ -60,8 +60,11 @@ async function main() {
     if (!u || !sameSite(u, rootHost) || !isHtmlCandidate(u)) return;
     if (!robotsAllows(robots, u)) { result.robots.disallowed = (result.robots.disallowed || 0) + 1; return; }
     const k = dedupeKey(u);
-    if (!discovered.has(k) && discovered.size < 5000) discovered.set(k, k);
+    const key = k.replace(/^(https?:\/\/)www\./, '$1'); // www.x.vn và x.vn là một trang
+    if (!discovered.has(key) && discovered.size < 5000) discovered.set(key, k);
+    return discovered.get(key);
   };
+  const sitemapOf = new Map(); // URL → tên file sitemap chứa nó
 
   log('robots', result.robots.status);
   // sitemap
@@ -76,7 +79,7 @@ async function main() {
       if (!r || r.status !== 200 || !/<(urlset|sitemapindex)/i.test(r.text)) continue;
       const locs = [...r.text.matchAll(/<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]]+?)\s*(?:\]\]>)?\s*<\/loc>/gi)].map((m) => m[1].trim());
       if (/<sitemapindex/i.test(r.text)) queue.push(...locs.slice(0, 6));
-      else locs.forEach((l) => addUrl(l));
+      else { const name = sm.split('/').pop().toLowerCase(); locs.forEach((l) => { const k = addUrl(l); if (k) sitemapOf.set(k, name); }); }
       result.sitemap = { status: 'found', urls: discovered.size };
     }
     if (result.sitemap.status !== 'found') result.sitemap = { status: 'not_found', urls: 0 };
@@ -111,15 +114,24 @@ async function main() {
   const visited = new Set();
   let shot = 0;
   async function visit(url, template, kind) {
-    if (visited.has(url) || timeLeft() < 15000) return null;
-    visited.add(url);
+    const vkey = url.replace(/^(https?:\/\/)www\./, '$1');
+    if (visited.has(vkey) || timeLeft() < 15000) return null;
+    visited.add(vkey);
     log('visit', url);
     const page = { url, template, kind, captured_at: new Date().toISOString(), features: [] };
     const p = await desktop.newPage();
     try {
       const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
       page.status = resp?.status() ?? null;
+      if (page.status >= 400) throw new Error(`HTTP ${page.status}`);
       await p.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+      await p.evaluate(async () => {
+        const step = Math.max(400, window.innerHeight * 0.9);
+        for (let y = 0, i = 0; y < document.documentElement.scrollHeight && i < 14; y += step, i++) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 200)); }
+        window.scrollTo(0, 0);
+      }).catch(() => {});
+      await p.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+      await p.waitForTimeout(800);
       const finalUrl = p.url();
       if (!sameSite(finalUrl, rootHost)) throw new Error(`Chuyển hướng ra ngoài phạm vi: ${finalUrl}`);
       page.final_url = finalUrl;
@@ -129,7 +141,7 @@ async function main() {
         page.features.push({ feature: null, detail: 'Trang yêu cầu CAPTCHA / bị chặn — không vượt qua', verification: 'unverified' });
       }
       const d = await p.evaluate(detectInPage);
-      page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count;
+      page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind;
       if (!page.blocked) page.features = d.features;
       if (d.generator && !result.generator) result.generator = d.generator;
       d.links.forEach((h) => addUrl(h, finalUrl));
@@ -177,7 +189,15 @@ async function main() {
   log('done', visited.size);
   result.discovered = [...discovered.values()];
   const groupsFinal = groupTemplates(result.discovered);
-  result.templates = groupsFinal.map((g) => ({ template: g.template, kind: g.kind, url_count: g.urls.length, examples: g.urls.slice(0, 5), sampled: result.pages.filter((p) => classify(p.url).template === g.template).length }));
+  result.templates = groupsFinal.map((g) => {
+    const sampled = result.pages.filter((p) => !p.error && classify(p.url).template === g.template);
+    const kinds = sampled.map((p) => p.page_kind).filter(Boolean);
+    const detected = kinds.length && kinds.filter((k) => k === kinds[0]).length * 2 >= sampled.length ? kinds[0] : null;
+    return { template: g.template, kind: g.kind, url_count: g.urls.length, examples: g.urls.slice(0, 5), sampled: sampled.length, detected };
+  });
+  const smCount = (re) => [...sitemapOf.values()].filter((n) => re.test(n)).length;
+  result.sitemap.product_urls = smCount(/product|san-?pham|sanpham/);
+  result.sitemap.post_urls = smCount(/post|bai-?viet|tin-?tuc|news|blog|article/);
   result.coverage = {
     discovered: result.discovered.length,
     read: result.pages.filter((p) => !p.error && !p.blocked).length,
