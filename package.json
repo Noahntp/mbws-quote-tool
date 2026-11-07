@@ -5,7 +5,7 @@
   "description": "Công cụ báo giá website: khảo sát web mẫu, chuẩn hóa yêu cầu, dự toán và báo giá theo gói Mắt Bão WS",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/index.js",

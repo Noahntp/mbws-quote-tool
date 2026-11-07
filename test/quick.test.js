@@ -9,7 +9,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mbws-quick-'));
 process.env.DATA_DIR = dir; // phải đặt trước khi nạp db.js
 const { app } = await import('../server/app.js');
 const { ingest } = await import('../server/jobs.js');
-const { run } = await import('../server/db.js');
+const { run, one } = await import('../server/db.js');
 
 let server; let base;
 before(async () => { await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); }); base = `http://127.0.0.1:${server.address().port}`; });
@@ -27,7 +27,10 @@ test('tên miền sai bị từ chối, tên miền đúng tạo báo giá đặ
   const p = await api(`/api/projects/${r.json.id}`);
   assert.equal(p.json.project.name, 'nhahang-mau.vn');
   assert.equal(p.json.refs[0].url, 'https://www.nhahang-mau.vn/');
-  assert.equal(p.json.runs[0].status, 'queued'); // tự đưa vào hàng đợi quét
+  assert.equal(p.json.runs[0].status, 'running'); // hiện "đang quét" ngay
+  // việc quét nằm trong hàng đợi mới; tiến trình chạy code cũ (tìm analysis_runs.status='queued') không giành được
+  assert.equal(one('SELECT status FROM job_queue WHERE run_id=?', p.json.runs[0].id).status, 'queued');
+  assert.equal(one("SELECT COUNT(*) n FROM analysis_runs WHERE status='queued'").n, 0);
 });
 
 test('giá sơ bộ theo web mẫu, rồi phát sinh khi chọn thêm', async () => {

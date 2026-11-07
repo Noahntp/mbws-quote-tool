@@ -8,7 +8,7 @@ import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureBy
 import { normalizeDomain, domainOf } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
-import { captureBaseline } from './jobs.js';
+import { captureBaseline, enqueueRun } from './jobs.js';
 
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -268,9 +268,11 @@ app.post('/api/projects/:id/survey', h((req, res) => {
 
 function queueSurvey(pid, refId, url, maxUrlsRaw, userId) {
   const maxUrls = Math.min(Math.max(Number(maxUrlsRaw) || 20, 1), 40);
-  const r = run("INSERT INTO analysis_runs (project_id, ref_id, url, status, max_urls, created_by, input_hash) VALUES (?,?,?,'queued',?,?,?)", pid, refId, url, maxUrls, userId, sha({ url, maxUrls }));
-  audit({ project_id: pid, entity: 'analysis_run', entity_id: Number(r.lastInsertRowid), user_id: userId, action: 'queue', after: { url, maxUrls } });
-  return Number(r.lastInsertRowid);
+  const r = run("INSERT INTO analysis_runs (project_id, ref_id, url, status, max_urls, created_by, input_hash) VALUES (?,?,?,'running',?,?,?)", pid, refId, url, maxUrls, userId, sha({ url, maxUrls }));
+  const runId = Number(r.lastInsertRowid);
+  enqueueRun(runId);
+  audit({ project_id: pid, entity: 'analysis_run', entity_id: runId, user_id: userId, action: 'queue', after: { url, maxUrls } });
+  return runId;
 }
 
 // Khảo sát mọi web tham khảo chưa từng quét (mỗi URL một lần)

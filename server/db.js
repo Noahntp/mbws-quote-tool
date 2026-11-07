@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'storage');
+export const DATA_DIR = process.env.DATA_DIR || (process.env.VERCEL ? '/tmp/storage' : path.join(ROOT, 'storage'));
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'quote.db'));
@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS actuals (
   hours_estimated REAL NOT NULL DEFAULT 0, hours_actual REAL NOT NULL DEFAULT 0,
   scope TEXT NOT NULL DEFAULT 'original' CHECK (scope IN ('original','change','bugfix','rework')), cause TEXT, note TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')));
+
+-- Hàng đợi quét (v2). analysis_runs chỉ còn là trạng thái hiển thị; việc nhận job đi qua bảng này,
+-- để tiến trình chạy code cũ (chỉ biết analysis_runs.status='queued') không thể giành job.
+CREATE TABLE IF NOT EXISTS job_queue (
+  run_id INTEGER PRIMARY KEY REFERENCES analysis_runs(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0, locked_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY, project_id INTEGER, entity TEXT NOT NULL, entity_id INTEGER, user_id INTEGER,

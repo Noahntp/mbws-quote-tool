@@ -11,23 +11,37 @@ let busy = false;
 
 export function runDir(runId) { return path.join(DATA_DIR, 'runs', String(runId)); }
 
+// Đưa một lượt quét vào hàng đợi. analysis_runs hiển thị "đang quét" ngay (status='running')
+// nhưng chỉ job_queue quyết định ai chạy — tiến trình code cũ không đọc bảng này.
+export function enqueueRun(runId) {
+  run("UPDATE analysis_runs SET status='running', error=NULL, finished_at=NULL WHERE id=?", runId);
+  run("INSERT INTO job_queue (run_id, status) VALUES (?, 'queued') ON CONFLICT(run_id) DO UPDATE SET status='queued', attempts=0, locked_at=NULL", runId);
+}
+
 export function startJobLoop() {
-  // job đang "running" khi server tắt → trả về hàng đợi
-  run("UPDATE analysis_runs SET status='queued', locked_at=NULL WHERE status='running'");
+  // server tắt giữa chừng → trả job về hàng đợi; lượt quét kiểu cũ chưa xong → chuyển sang hàng đợi mới
+  run("UPDATE job_queue SET status='queued', locked_at=NULL WHERE status='running'");
+  for (const r of all("SELECT id FROM analysis_runs WHERE status IN ('queued','running') AND id NOT IN (SELECT run_id FROM job_queue)")) enqueueRun(r.id);
   setInterval(tick, 1500).unref();
 }
 
 async function tick() {
   if (busy) return;
-  const job = one("SELECT * FROM analysis_runs WHERE status='queued' ORDER BY id LIMIT 1");
+  const job = one("SELECT run_id FROM job_queue WHERE status='queued' ORDER BY run_id LIMIT 1");
   if (!job) return;
-  const claimed = run("UPDATE analysis_runs SET status='running', locked_at=datetime('now'), started_at=datetime('now'), attempts=attempts+1 WHERE id=? AND status='queued'", job.id);
+  const claimed = run("UPDATE job_queue SET status='running', locked_at=datetime('now'), attempts=attempts+1 WHERE run_id=? AND status='queued'", job.run_id);
   if (!claimed.changes) return; // tiến trình khác đã nhận
+  run("UPDATE analysis_runs SET status='running', started_at=datetime('now'), attempts=attempts+1, locked_at=datetime('now') WHERE id=?", job.run_id);
   busy = true;
-  try { await execute(one('SELECT * FROM analysis_runs WHERE id=?', job.id)); }
-  catch (e) {
-    const j = one('SELECT attempts FROM analysis_runs WHERE id=?', job.id);
-    run('UPDATE analysis_runs SET status=?, error=?, locked_at=NULL, finished_at=datetime(\'now\') WHERE id=?', j.attempts < MAX_ATTEMPTS ? 'queued' : 'failed', e.message, job.id);
+  try {
+    await execute(one('SELECT * FROM analysis_runs WHERE id=?', job.run_id));
+    const st = one('SELECT status FROM analysis_runs WHERE id=?', job.run_id)?.status;
+    run('UPDATE job_queue SET status=?, locked_at=NULL WHERE run_id=?', st === 'failed' ? 'failed' : 'done', job.run_id);
+  } catch (e) {
+    const q = one('SELECT attempts FROM job_queue WHERE run_id=?', job.run_id);
+    const retry = q.attempts < MAX_ATTEMPTS;
+    run('UPDATE job_queue SET status=?, locked_at=NULL WHERE run_id=?', retry ? 'queued' : 'failed', job.run_id);
+    run("UPDATE analysis_runs SET status=?, error=?, locked_at=NULL, finished_at=CASE WHEN ? THEN NULL ELSE datetime('now') END WHERE id=?", retry ? 'running' : 'failed', e.message, retry ? 1 : 0, job.run_id);
   } finally { busy = false; }
 }
 
