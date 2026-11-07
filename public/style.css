@@ -57,3 +57,4 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space:
 tr.excluded td { opacity: .5; } tr.extra td:first-child { box-shadow: inset 3px 0 var(--accent); }
 details summary { cursor: pointer; }
 @media (max-width: 700px) { main { padding: 12px; } .top { padding: 8px 12px; } }
+@media (max-width: 900px) { .quick { grid-template-columns: 1fr !important; } .quick .panel[style*="sticky"] { position: static !important; } }

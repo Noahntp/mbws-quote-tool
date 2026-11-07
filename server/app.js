@@ -97,10 +97,11 @@ app.get('/api/projects', (req, res) => {
   res.json(rows.map((p) => { const st = projectState(p.id); return { ...p, pricing_json: undefined, status: st.status, status_label: STATUS_LABEL[st.status], price_net: st.preview?.price_net ?? null }; }));
 });
 
-app.post('/api/projects', h((req, res) => {
+app.post('/api/projects', h(async (req, res) => {
   need(req, 'project.edit');
   const b = req.body;
-  if (!b.name) throw new HttpError(400, 'Cần tên dự án');
+  const firstUrl = [].concat(b.ref_urls || []).map(normalizeInput).find(Boolean);
+  b.name = (b.name || '').trim() || (b.customer_name || '').trim() || (firstUrl ? 'Web giống ' + new URL(firstUrl).hostname.replace(/^www\./, '') : '') || 'Báo giá mới';
   const pol = parseSetting(activeSetting('policy'));
   const id = tx(() => {
     const n = one('SELECT COUNT(*) n FROM projects').n + 1;
@@ -122,7 +123,69 @@ app.post('/api/projects', h((req, res) => {
     audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'create', after: b });
     return pid;
   });
+  if (b.brief && String(b.brief).trim()) await applyBrief(id, req.user, b.brief);
   res.json({ id });
+}));
+
+// ---------- Báo giá nhanh ----------
+// Phân tích mô tả và áp dụng: khách muốn → Làm, khách nói không → Bỏ (không ghi đè quyết định đã có).
+async function applyBrief(pid, user, brief) {
+  const sug = await suggestFromBrief(catalog(), brief);
+  tx(() => {
+    for (const it of sug.items) {
+      const ex = one('SELECT * FROM requirements WHERE project_id=? AND feature=?', pid, it.feature);
+      if (ex && ex.decision !== 'pending') continue;
+      if (ex) run("UPDATE requirements SET decision=?, source_kind='client', quantity=COALESCE(?, quantity), updated_at=datetime('now') WHERE id=?", it.wanted ? 'include' : 'exclude', it.quantity ?? null, ex.id);
+      else addRequirement(pid, user, { feature: it.feature, quantity: it.quantity ?? undefined, acceptance: it.acceptance, notes: 'Từ mô tả: ' + it.evidence, decision: it.wanted ? 'include' : 'exclude' });
+    }
+    syncAutoLines(pid);
+  });
+  return sug;
+}
+
+// Nếu đã từng "Sinh dự toán" thì sinh lại dòng tự động để giá luôn theo yêu cầu mới (giữ dòng thêm tay).
+function syncAutoLines(pid, force = false) {
+  if (!force && !one("SELECT 1 FROM estimate_lines WHERE project_id=? AND source='auto' LIMIT 1", pid)) return 0;
+  const lines = buildAutoLines(catalog(), all('SELECT * FROM requirements WHERE project_id=?', pid));
+  run("DELETE FROM estimate_lines WHERE project_id=? AND source='auto'", pid);
+  lines.forEach((l, i) => run('INSERT INTO estimate_lines (project_id, code, title, grp, role, unit, qty, o, m, p, feature, requirement_id, source, sort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    pid, l.code, l.title, l.group, l.role, l.unit, l.qty, l.o, l.m, l.p, l.feature, l.requirement_id, 'auto', i));
+  return lines.length;
+}
+
+app.post('/api/projects/:id/brief-apply', h(async (req, res) => {
+  need(req, 'requirement.edit');
+  const pid = Number(req.params.id);
+  run("UPDATE projects SET brief=?, rev=rev+1, updated_at=datetime('now') WHERE id=?", req.body.brief || null, pid);
+  const sug = await applyBrief(pid, req.user, req.body.brief || '');
+  res.json({ ok: true, engine: sug.engine, found: sug.items.length, warning: sug.warning });
+}));
+
+// Tick / bỏ tick một tính năng, hoặc đổi khối lượng
+app.post('/api/projects/:id/quick-feature', h((req, res) => {
+  need(req, 'requirement.decide');
+  const pid = Number(req.params.id);
+  const { feature, include } = req.body;
+  const quantity = req.body.quantity === '' || req.body.quantity == null ? null : Number(req.body.quantity);
+  if (!featureByCode(catalog(), feature)) throw new HttpError(400, 'Tính năng không có trong danh mục');
+  tx(() => {
+    const ex = one('SELECT * FROM requirements WHERE project_id=? AND feature=?', pid, feature);
+    const decision = include ? 'include' : 'exclude';
+    let rid = ex?.id;
+    if (ex) {
+      run("UPDATE requirements SET decision=?, quantity=COALESCE(?, quantity), updated_at=datetime('now') WHERE id=?", decision, quantity, ex.id);
+      run(`UPDATE questions SET status=? WHERE requirement_id=? AND status=?`, include ? 'open' : 'dropped', ex.id, include ? 'dropped' : 'open');
+      audit({ project_id: pid, entity: 'requirement', entity_id: ex.id, user_id: req.user.id, action: 'quick_update', before: { decision: ex.decision, quantity: ex.quantity }, after: { decision, quantity } });
+    } else if (include) {
+      rid = addRequirement(pid, req.user, { feature, quantity: quantity ?? undefined, decision: 'include' });
+    }
+    // Nhập số lượng = đã trả lời câu hỏi "bao nhiêu" của mục đó
+    if (include && quantity != null && rid && ['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS'].includes(feature)) {
+      run("UPDATE questions SET answer=?, status='answered' WHERE requirement_id=? AND status='open' AND blocking=1", `Số lượng: ${quantity} (nhập ở báo giá nhanh)`, rid);
+    }
+    syncAutoLines(pid);
+  });
+  res.json({ ok: true });
 }));
 
 app.get('/api/projects/:id', h((req, res) => {
@@ -526,6 +589,24 @@ app.post('/api/versions/:id/:action(submit|approve|reject)', h((req, res) => {
 }));
 
 // Bản gửi khách: chỉ bản đã duyệt; không chứa chi phí nội bộ, biên lợi nhuận hay đơn giá nhân sự.
+app.get('/quote/project/:pid', h((req, res) => {
+  const pid = Number(req.params.pid);
+  const st = projectState(pid);
+  const b = st.build;
+  const r = st.preview;
+  const fatal = (r.checks || []).filter((c) => c.level === 'error');
+  if (!b.reqs.some((x) => x.decision === 'include')) throw new HttpError(400, 'Chưa chọn tính năng nào để báo giá.');
+  if (fatal.length) throw new HttpError(422, 'Không in được báo giá: ' + fatal.map((c) => c.message).join(' | '));
+  const validDays = Number(b.pricing.valid_days || 30);
+  const v = {
+    quote_code: `BG-${b.p.code}`, version: 'sơ bộ', created_at: new Date().toISOString().slice(0, 10),
+    valid_until: new Date(Date.now() + validDays * 86400000).toISOString().slice(0, 10), payment_terms: b.pricing.payment_terms || '',
+    snapshot: { project: b.p, input: b.input, requirements: b.reqs, exclusions_standard: catalog().standard_exclusions }, result: r,
+  };
+  audit({ project_id: pid, entity: 'quick_quote', entity_id: pid, action: 'print', after: { price_net: r.price_net, package: b.input.package?.code } });
+  res.type('html').send(renderCustomerQuote(v, { preliminary: true }));
+}));
+
 app.get('/quote/:id', h((req, res) => {
   const v = getVersion(Number(req.params.id));
   if (v.status !== 'approved' && req.query.preview !== '1') throw new HttpError(403, 'Chỉ xuất bản cho khách từ phiên bản đã duyệt.');

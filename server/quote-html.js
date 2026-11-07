@@ -2,7 +2,7 @@
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const vnd = (n) => (n == null ? '—' : Math.round(Number(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' ₫');
 
-export function renderCustomerQuote(v, { draft }) {
+export function renderCustomerQuote(v, { draft, preliminary } = {}) {
   const s = v.snapshot; const r = v.result; const p = s.project;
   const included = s.requirements.filter((x) => x.decision === 'include');
   const excluded = s.requirements.filter((x) => x.decision === 'exclude');
@@ -34,8 +34,9 @@ export function renderCustomerQuote(v, { draft }) {
   @media print{body{padding:0}.noprint{display:none}}
 </style></head><body><div class="wrap">
 ${draft ? '<div class="draft"><b>BẢN XEM TRƯỚC — chưa được duyệt, không gửi khách.</b></div>' : ''}
+${preliminary ? '<div class="draft"><b>BÁO GIÁ SƠ BỘ</b> — giá tham khảo theo phạm vi dưới đây; có thể điều chỉnh khi chốt yêu cầu chi tiết.</div>' : ''}
 <div class="head"><div><h1>Báo giá thiết kế website</h1><div class="muted">${esc(p.name)}</div></div>
-<div style="text-align:right"><div><b>${esc(v.quote_code)}</b> <span class="badge">Phiên bản ${v.version}</span></div>
+<div style="text-align:right"><div><b>${esc(v.quote_code)}</b> <span class="badge">${preliminary ? 'Sơ bộ' : 'Phiên bản ' + esc(v.version)}</span></div>
 <div class="muted">Ngày lập: ${esc(String(v.created_at).slice(0, 10))}</div><div class="muted">Hiệu lực đến: <b>${esc(v.valid_until)}</b></div></div></div>
 <p>Kính gửi: <b>${esc(p.customer_name || '')}</b>${p.customer_contact ? ' — ' + esc(p.customer_contact) : ''}</p>
 
@@ -63,7 +64,7 @@ ${pkg ? `<p class="muted">Quyền lợi gói ${esc(pkg.code)}: ${(pkg.highlights
 <li>Yêu cầu mới hoặc thay đổi phạm vi được ghi nhận bằng báo giá bổ sung có phiên bản riêng, không ghi đè phạm vi gốc.</li>
 <li>Báo giá hết hiệu lực sau ngày ${esc(v.valid_until)}.</li>
 </ul>
-<p class="muted" style="margin-top:28px">Người duyệt: ${esc(v.approved_by_name || '—')}${v.approved_at ? ' — ' + esc(String(v.approved_at).slice(0, 10)) : ''}</p>
+${preliminary ? '' : `<p class="muted" style="margin-top:28px">Người duyệt: ${esc(v.approved_by_name || '—')}${v.approved_at ? ' — ' + esc(String(v.approved_at).slice(0, 10)) : ''}</p>`}
 <p class="noprint"><button onclick="print()">In / Lưu PDF</button></p>
 </div></body></html>`;
 }

@@ -124,8 +124,9 @@ export function ingest(job, res) {
       }
       const code = nextCode('requirements', job.project_id, 'R');
       const qty = quantities[feature] ?? f.default_qty ?? 1;
-      const r = run(`INSERT INTO requirements (project_id, code, feature, title, source_kind, evidence_codes, decision, quantity, unit) VALUES (?,?,?,?,?,?, 'pending', ?, ?)`,
-        job.project_id, code, feature, f.title, ev.best === 'observed' ? 'observed' : 'inferred', JSON.stringify(ev.codes), qty, f.unit);
+      const autoInclude = ev.best === 'observed' || feature === 'PAGES';
+      const r = run(`INSERT INTO requirements (project_id, code, feature, title, source_kind, evidence_codes, decision, quantity, unit) VALUES (?,?,?,?,?,?,?,?,?)`,
+        job.project_id, code, feature, f.title, ev.best === 'observed' ? 'observed' : 'inferred', JSON.stringify(ev.codes), autoInclude ? 'include' : 'pending', qty, f.unit);
       for (const q of f.questions || []) {
         run('INSERT INTO questions (project_id, code, requirement_id, text, blocking) VALUES (?,?,?,?,?)', job.project_id, nextCode('questions', job.project_id, 'Q'), Number(r.lastInsertRowid), q.text, q.blocking ? 1 : 0);
       }

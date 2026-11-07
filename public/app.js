@@ -43,7 +43,7 @@ function route() {
   const h = location.hash.slice(1) || '/';
   document.querySelectorAll('.top nav a').forEach((a) => a.classList.toggle('on', a.getAttribute('href') === '#' + h || (h.startsWith('/p/') && a.getAttribute('href') === '#/')));
   const m = h.match(/^\/p\/(\d+)(?:\/(\w+))?/);
-  if (m) { S.tab = m[2] || 'profile'; return openProject(Number(m[1])); }
+  if (m) { S.tab = m[2] || 'quick'; return openProject(Number(m[1])); }
   if (h === '/packages') return viewPackages();
   if (h === '/settings') return viewSettings();
   if (h === '/metrics') return viewMetrics();
@@ -54,20 +54,16 @@ function route() {
 async function viewProjects() {
   const rows = await api('/api/projects');
   $app.innerHTML = `
-  <h1>Hồ sơ báo giá</h1>
-  <p class="muted">Luồng: tạo hồ sơ → khảo sát web mẫu → chốt yêu cầu → bóc tách công việc → tính giá → duyệt & xuất.</p>
-  ${can('project.edit') ? `<details class="panel" ${rows.length ? '' : 'open'}><summary><b>+ Tạo hồ sơ mới</b></summary>
-    <div class="grid2" style="margin-top:10px">
-      <label class="f">Tên dự án *<input id="np_name" placeholder="Website bán gạo"></label>
-      <label class="f">Khách hàng<input id="np_customer"></label>
-      <label class="f">Liên hệ<input id="np_contact"></label>
-      <label class="f">Loại dự án<select id="np_type"><option value="new">Làm mới</option><option value="redesign">Thiết kế lại</option><option value="migrate">Chuyển nền tảng</option><option value="feature">Bổ sung tính năng</option></select></label>
-      <label class="f">Loại website<select id="np_kind"><option value="catalog">Giới thiệu / danh mục</option><option value="commerce">Có giao dịch</option></select></label>
-      <label class="f">Ngân sách (VND)<input id="np_budget" type="number"></label>
+  <h1>Báo giá website</h1>
+  ${can('project.edit') ? `<div class="panel">
+    <h3 style="margin-top:0">Tạo báo giá mới</h3>
+    <div class="grid2">
+      <label class="f">Khách hàng<input id="np_customer" placeholder="Tên khách / công ty"></label>
+      <label class="f">Web mẫu khách thích<input id="np_refs" placeholder="https://web-mau.vn"></label>
     </div>
-    <label class="f" style="margin-top:8px">Web tham khảo (mỗi dòng một URL)<textarea id="np_refs" placeholder="https://..."></textarea></label>
-    <label class="f">Brief / yêu cầu của khách<textarea id="np_brief"></textarea></label>
-    <p><button class="primary" data-act="createProject">Tạo hồ sơ</button></p></details>` : ''}
+    <label class="f" style="margin-top:8px">Khách cần gì? (tùy chọn)<textarea id="np_brief" placeholder="Ví dụ: web nhà hàng 6 trang, đặt bàn online, chat Zalo, bản đồ, 2 ngôn ngữ Việt – Anh"></textarea></label>
+    <p><button class="primary" data-act="createProject">Tạo & báo giá</button> <span class="muted small">Hệ thống tự quét web mẫu và đọc mô tả để chọn sẵn tính năng.</span></p></div>` : ''}
+  <h2>Báo giá đã tạo</h2>
   <div class="panel tablewrap"><table><thead><tr><th>Mã</th><th>Dự án</th><th>Khách hàng</th><th>Phụ trách</th><th>Trạng thái</th><th class="n">Giá dự kiến</th><th>Cập nhật</th></tr></thead><tbody>
   ${rows.map((p) => `<tr><td><a href="#/p/${p.id}">${esc(p.code)}</a></td><td><a href="#/p/${p.id}">${esc(p.name)}</a></td><td>${esc(p.customer_name || '')}</td><td>${esc(p.owner_name || '')}</td><td>${chip(p.status_label, STATUS_CHIP[p.status])}</td><td class="n">${vnd(p.price_net)}</td><td class="small muted">${esc(p.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Chưa có hồ sơ.</td></tr>'}
   </tbody></table></div>`;
@@ -77,6 +73,7 @@ async function viewProjects() {
 async function openProject(id, keepScroll) {
   const y = window.scrollY;
   S.project = await api(`/api/projects/${id}`);
+  if (S.tab === 'quick') S.rec = await api(`/api/projects/${id}/recommend`).catch(() => null);
   renderProject();
   if (keepScroll) window.scrollTo(0, y);
   const running = S.project.runs.some((r) => r.status === 'queued' || r.status === 'running');
@@ -86,8 +83,9 @@ async function openProject(id, keepScroll) {
 const reload = () => openProject(S.project.project.id, true);
 
 function renderProject() {
+  if (S.tab === 'quick') return renderQuick();
   const P = S.project; const p = P.project;
-  const tabs = [['profile', 'Hồ sơ & brief'], ['survey', 'Khảo sát web mẫu'], ['reqs', 'Chốt yêu cầu'], ['wbs', 'Bóc tách công việc'], ['price', 'Tính giá'], ['versions', 'Duyệt & xuất'], ['actuals', 'Sau bàn giao'], ['log', 'Lịch sử']];
+  const tabs = [['quick', '⚡ Báo giá nhanh'], ['profile', 'Hồ sơ & brief'], ['survey', 'Khảo sát web mẫu'], ['reqs', 'Chốt yêu cầu'], ['wbs', 'Bóc tách công việc'], ['price', 'Tính giá'], ['versions', 'Duyệt & xuất'], ['actuals', 'Sau bàn giao'], ['log', 'Lịch sử']];
   const blocking = P.questions.filter((q) => q.blocking && q.status === 'open').length;
   $app.innerHTML = `
   <div class="row" style="justify-content:space-between">
@@ -104,6 +102,89 @@ function renderProject() {
   <div id="tab"></div>`;
   const el = document.getElementById('tab');
   ({ profile: tabProfile, survey: tabSurvey, reqs: tabReqs, wbs: tabWbs, price: tabPrice, versions: tabVersions, actuals: tabActuals, log: tabLog })[S.tab]?.(el);
+}
+
+// ---------- BÁO GIÁ NHANH (1 màn hình) ----------
+const QUICK_GROUPS = [
+  ['Cơ bản', ['PRODUCT_CATALOG', 'BLOG', 'SEARCH', 'FILTER', 'CONTACT_FORM', 'CHAT_ZALO', 'MESSENGER', 'PHONE_CALL', 'MAP', 'SOCIAL', 'ANALYTICS', 'SEO']],
+  ['Bán hàng', ['CART', 'PAYMENT_ONLINE', 'SHIPPING', 'OMNI_SYNC']],
+  ['Khách hàng', ['MEMBER_LOGIN', 'LOYALTY', 'BOOKING', 'LANDING', 'TRACKING']],
+  ['Nâng cao', ['MULTILANG', 'INTERNATIONAL', 'AI_ASSISTANT', 'OMNI_CONTENT', 'ERP_INTEGRATION', 'DATA_MIGRATION']],
+];
+const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm cần nhập'], ['DATA_POSTS', 'Số bài viết cần nhập']];
+
+function renderQuick() {
+  const P = S.project; const p = P.project; const r = P.preview; const cat = S.meta.catalog;
+  const reqBy = Object.fromEntries(P.requirements.map((x) => [x.feature, x]));
+  const cov = P.applied?.coverage || {};
+  const covOf = (rq) => (rq ? cov[`${rq.feature}:${rq.id}`] : null);
+  const running = P.runs.filter((x) => x.status === 'queued' || x.status === 'running');
+  const runOf = (url) => P.runs.find((x) => x.url === url);
+  const included = P.requirements.filter((x) => x.decision === 'include');
+  const pkgCode = p.pricing.package_code || P.meta.auto_package;
+  const pkgAll = S.meta.packages.lines.flatMap((l) => l.packages);
+  const pkg = pkgAll.find((x) => x.code === pkgCode);
+  const fatal = (r.checks || []).filter((c) => c.level === 'error');
+  const questions = P.questions.filter((q) => q.status === 'open' && q.blocking && included.some((x) => x.id === q.requirement_id));
+  const feat = (code) => {
+    const f = cat.features.find((x) => x.code === code); if (!f) return '';
+    const rq = reqBy[code]; const on = rq?.decision === 'include'; const c = covOf(rq);
+    const seen = rq && rq.evidence_codes.length ? (rq.source_kind === 'observed' ? chip('web mẫu có', 'ok') : chip('web mẫu có thể có', 'warn')) : '';
+    const bill = on && c ? (c.status === 'not_included' ? chip('+ tính thêm', 'accent') : c.status === 'paid_addon' ? chip('+ mua thêm', 'accent') : chip('trong gói', '')) : '';
+    return `<label style="display:flex;gap:6px;align-items:center;padding:4px 0"><input type="checkbox" data-qfeat="${code}" ${on ? 'checked' : ''} ${can('requirement.decide') ? '' : 'disabled'}> ${esc(f.title)} ${seen} ${bill}</label>`;
+  };
+  const qty = ([code, label]) => {
+    const rq = reqBy[code]; const on = rq?.decision === 'include';
+    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : 'không';
+    return `<label class="f">${label}<input type="number" min="0" class="num" data-qqty="${code}" style="width:130px" value="${on ? esc(rq.quantity ?? '') : ''}" placeholder="${esc(hint)}"></label>`;
+  };
+  $app.innerHTML = `
+  <div class="row" style="justify-content:space-between">
+    <div><a href="#/" class="small">← Danh sách</a><h1 style="margin-top:4px">${esc(p.name)}</h1><div class="muted small">${esc(p.code)}</div></div>
+    <a href="#/p/${p.id}/profile" class="small">Nâng cao ▸ (bóc tách giờ công, duyệt, phiên bản)</a>
+  </div>
+  <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr);gap:14px;margin-top:12px" class="quick">
+  <div>
+    <div class="panel">
+      <h3 style="margin-top:0">1. Khách & web mẫu</h3>
+      <div class="grid2">
+        <label class="f">Khách hàng<input data-qinfo="customer_name" value="${esc(p.customer_name || '')}"></label>
+        <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
+      </div>
+      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') : ru.status === 'failed' ? chip('quét lỗi: ' + (ru.error || '').slice(0, 60), 'err') : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
+        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm web mẫu: https://..." style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
+      <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
+      <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">2. Tính năng cần làm</h3>
+      ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
+      <div class="row">${QUICK_QTY.map(qty).join('')}</div>
+      <div class="grid2" style="margin-top:10px">${QUICK_GROUPS.map(([g, codes]) => `<div><b class="small muted" style="text-transform:uppercase">${g}</b>${codes.map(feat).join('')}</div>`).join('')}</div>
+    </div>
+  </div>
+  <div>
+    <div class="panel" style="position:sticky;top:64px;border-color:var(--accent)">
+      <h3 style="margin-top:0">3. Giá</h3>
+      ${!included.length ? `<p class="muted">Tick tính năng (hoặc nhập web mẫu / mô tả) để ra giá.</p>` : `
+      ${pkg ? `<div class="small muted">Gói ${p.pricing.package_code ? 'đã chọn' : 'đề xuất (rẻ nhất phù hợp)'}</div><div style="font-size:16px"><b>${esc(pkg.code)}</b> – ${esc(pkg.name)}</div>` : '<div class="small muted">Tính theo chi phí</div>'}
+      <div style="font-size:28px;font-weight:800;color:var(--accent);margin:6px 0">${vnd(r.price_net)}</div>
+      <div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>
+      <table style="margin-top:8px"><tbody>
+        ${r.mode === 'package' ? `<tr><td>Giá gói</td><td class="n">${vnd(r.package_price)}</td></tr>` : ''}
+        ${(r.addons || []).map((a) => `<tr><td>${esc(a.name)} ×${a.qty}</td><td class="n">${vnd(a.amount)}</td></tr>`).join('')}
+        ${Number(r.extras_sell) > 0 ? `<tr><td>Tính thêm ngoài gói</td><td class="n">${vnd(r.extras_sell)}</td></tr>` : ''}
+        ${Number(r.discount_amount) > 0 ? `<tr><td>Giảm ${r.discount_pct}%</td><td class="n">− ${vnd(r.discount_amount)}</td></tr>` : ''}
+        ${(r.recurring || []).map((x) => `<tr><td class="muted">${esc(x.title)}</td><td class="n muted">${vnd(x.amount)}/${esc(x.period)}</td></tr>`).join('')}
+      </tbody></table>
+      <div class="row" style="margin-top:8px"><label class="f" style="min-width:0">Giảm giá %<input class="num" type="number" step="0.5" min="0" data-pr="discount_pct" value="${esc(p.pricing.discount_pct || 0)}"></label>
+        <button class="primary" data-act="printQuick" ${fatal.length ? 'disabled' : ''} style="flex:1;padding:10px">🖨 In báo giá</button></div>
+      ${fatal.length ? `<ul class="checks small">${fatal.map((c) => `<li class="error">⛔ ${esc(c.message)}</li>`).join('')}</ul>` : ''}
+      ${S.rec?.ranked?.length ? `<h3>Gói khác</h3><table class="small"><tbody>${S.rec.ranked.slice(0, 6).map((x) => `<tr ${x.code === pkgCode ? 'style="font-weight:700"' : ''}><td>${esc(x.code)} <span class="muted">${esc(x.name)}</span></td><td class="n">${trieu(x.price_list)}</td><td>${x.code === pkgCode ? '✓' : `<button class="link" data-act="pickPkg" data-code="${esc(x.code)}">Chọn</button>`}</td></tr>`).join('')}</tbody></table>
+        ${p.pricing.package_code ? `<button class="link small" data-act="autoPkg">↺ Tự chọn gói rẻ nhất</button>` : ''}` : ''}
+      ${questions.length ? `<h3>Nên hỏi khách</h3><ul class="small" style="margin:0 0 0 16px;padding:0">${questions.slice(0, 6).map((q) => `<li>${esc(q.text)}</li>`).join('')}</ul>` : ''}`}
+    </div>
+  </div></div>`;
 }
 
 // Gợi ý bước kế tiếp để luôn biết vì sao chưa có giá
@@ -512,9 +593,12 @@ const run = (fn) => async (el) => { try { el.disabled = true; await fn(el); } ca
 
 const ACT = {
   createProject: run(async () => {
-    const { id } = await api('/api/projects', 'POST', { name: val('np_name'), customer_name: val('np_customer'), customer_contact: val('np_contact'), project_type: val('np_type'), site_kind: val('np_kind'), budget: val('np_budget'), brief: val('np_brief'), ref_urls: val('np_refs').split(/\s+/).filter(Boolean) });
+    const { id } = await api('/api/projects', 'POST', { customer_name: val('np_customer'), brief: val('np_brief'), ref_urls: (val('np_refs') || '').split(/\s+/).filter(Boolean) });
     location.hash = `#/p/${id}`;
   }),
+  applyBrief: run(async () => { const r = await api(`/api/projects/${pid()}/brief-apply`, 'POST', { brief: document.getElementById('qBrief').value }); toast(r.found ? `Đã nhận ra ${r.found} tính năng từ mô tả` : 'Không nhận ra tính năng nào — hãy tick tay ở mục 2', !r.found); reload(); }),
+  printQuick: (el) => { window.open(`/quote/project/${pid()}`, '_blank'); },
+  autoPkg: run(async () => { await savePricing({ package_code: null, package_price: null }); }),
   saveProfile: run(async () => {
     const b = { rev: S.project.project.rev };
     document.querySelectorAll('[data-pf]').forEach((i) => { b[i.dataset.pf] = i.value; });
@@ -615,7 +699,17 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', async (e) => {
   const t = e.target;
   try {
-    if (t.dataset.rq) {
+    if (t.dataset.qfeat) {
+      await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: t.dataset.qfeat, include: t.checked });
+      await reload();
+    } else if (t.dataset.qqty) {
+      const q = t.value === '' ? 0 : Number(t.value);
+      await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: t.dataset.qqty, include: q > 0, quantity: q > 0 ? q : null });
+      await reload();
+    } else if (t.dataset.qinfo) {
+      await api(`/api/projects/${pid()}`, 'PUT', { [t.dataset.qinfo]: t.value, rev: S.project.project.rev });
+      await reload();
+    } else if (t.dataset.rq) {
       await api(`/api/requirements/${t.dataset.rq}`, 'PUT', { [t.dataset.k]: t.dataset.k === 'quantity' ? (t.value === '' ? null : Number(t.value)) : t.value });
       await reload();
     } else if (t.dataset.q) {
