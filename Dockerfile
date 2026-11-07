@@ -29,3 +29,4 @@ ENV DATA_DIR=/app/storage
 EXPOSE 3100
 
 CMD ["node", "--disable-warning=ExperimentalWarning", "server/index.js"]
+
