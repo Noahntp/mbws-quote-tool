@@ -689,7 +689,7 @@ app.get('/api/projects/:id/quick', h(async (req, res) => {
   const officialNow = Number((await projectState(pid)).preview.price_net ?? 0);
   res.json({
     options, volumes: b.pricing.volumes || null, budget: b.p.budget ?? null,
-    baseline: baseline ? { ...baseline, price: base.price, package: base.package, package_name: base.package_name, count: Object.keys(baseline.features || {}).filter((f) => f !== 'DESIGN_LEVEL').length } : null,
+    baseline: baseline ? { ...baseline, price: base.price, package: base.package, package_name: base.package_name, count: Object.keys(baseline.features || {}).filter((f) => !QTY_FEATURES.has(f)).length } : null,
     complexity: refreshAssessment(b.pricing.complexity),
     design_level: Number(b.reqs.find((r) => r.feature === 'DESIGN_LEVEL' && r.decision === 'include')?.quantity || 0) || null,
     current: { price: officialNow, package: cur.package },
