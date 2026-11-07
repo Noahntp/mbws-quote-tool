@@ -1,7 +1,7 @@
 // Đồng bộ dữ liệu các gói dịch vụ từ https://www.matbao.ws/ về data/packages.json
 // Website là SPA nên phải render bằng trình duyệt (Playwright) rồi đọc DOM.
 // Chạy: npm run sync:packages
-import { chromium } from 'playwright';
+import { launchChromium } from '../server/crawler/browser.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,7 +112,7 @@ async function gotoText(page, p) {
 }
 
 export async function syncPackages({ log = console.log } = {}) {
-  const browser = await chromium.launch();
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const heroUrl = BASE + '/web-hero/chi-tiet-7-goi-web-hero';

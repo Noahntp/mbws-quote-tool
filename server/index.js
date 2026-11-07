@@ -2,6 +2,7 @@ import dns from 'node:dns/promises';
 import crypto from 'node:crypto';
 import { app } from './app.js';
 import { startJobLoop } from './jobs.js';
+import { ready } from './db.js';
 
 const PORT = Number(process.env.PORT || 3100);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -21,5 +22,6 @@ async function detectFakeIp() {
 }
 
 await detectFakeIp();
-startJobLoop();
+await ready(); // tạo bảng / dữ liệu mẫu trước khi nhận yêu cầu
+await startJobLoop();
 app.listen(PORT, HOST, () => console.log(`Công cụ báo giá: http://${HOST}:${PORT}`));

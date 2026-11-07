@@ -66,6 +66,24 @@ const maxNumber = (v) => {
 };
 const levelOf = (v) => { const m = String(v || '').match(/[MS](\d)/); return m ? Number(m[1]) : null; };
 
+/** Mức may đo M1–M8 của gói (theo bảng tiêu chí matbao.ws). */
+export function packageDesignLevel(ctx) { return levelOf(criterionValue(ctx, 'Giao diện thiết kế theo yêu cầu')); }
+
+/**
+ * Giá gói. Gói có khoảng giá (HERO 6: 15–30 tr, HERO 7: 30–45 tr, HERO 8: 45–60 tr) được đặt theo độ phức tạp
+ * của web mẫu (gói từ mức may đo cần trở lên): fraction 0 → giá thấp nhất, 1 → cao nhất. Enterprise → giá cao nhất của HERO 8.
+ * hint = { level, fraction, enterprise } (từ đánh giá độ phức tạp), không có → giá thấp nhất.
+ */
+export function packagePrice(ctx, hint) {
+  const { min, max } = ctx.pkg.price;
+  if (!hint || min === max) return min;
+  const lv = packageDesignLevel(ctx);
+  if (hint.enterprise && lv === 8) return max;
+  if (lv == null || lv < hint.level) return min; // gói thấp hơn mức cần (thường đã bị loại)
+  // gói đúng mức hoặc phải nâng lên gói cao hơn (vì tính năng): giữ cùng vị trí trong khoảng giá → nâng gói luôn có chi phí
+  return Math.round((min + (max - min) * Math.max(0, Math.min(1, hint.fraction || 0))) / 500000) * 500000;
+}
+
 /** Gói có bao phủ một yêu cầu không? Trả về {status: 'included'|'paid_addon'|'capacity'|'not_included', ...} */
 export function coverage(catalog, packagesData, ctx, feature, qty) {
   const addons = packagesData.addons || [];
@@ -132,19 +150,24 @@ export function applyPackage(catalog, packagesData, ctx, lines, requirements) {
 }
 
 /** Xếp hạng các gói ZERO/HERO theo tổng giá bán (gói + add-on + phần ngoài gói). */
-export function recommendPackages(catalog, packagesData, { requirements, lines, rates, policy, external = [], risks = [] }) {
+export function recommendPackages(catalog, packagesData, { requirements, lines, rates, policy, external = [], risks = [], priceHint = null }) {
   const results = [];
+  // mức may đo cần (từ đánh giá độ phức tạp web mẫu) — gói thấp hơn mức này không làm giống web mẫu được
+  const dl = requirements.find((r) => r.feature === 'DESIGN_LEVEL' && r.decision === 'include');
+  const dlFeature = featureByCode(catalog, 'DESIGN_LEVEL');
   for (const ctx of packageList(packagesData)) {
     const applied = applyPackage(catalog, packagesData, ctx, lines, requirements);
-    const hard = Object.values(applied.coverage).find((c) => c.hard);
+    let hard = Object.values(applied.coverage).find((c) => c.hard);
+    if (!hard && dl && dlFeature) { const c = coverage(catalog, packagesData, ctx, dlFeature, Number(dl.quantity || 1)); if (c.status === 'not_included') hard = c; }
+    const price = packagePrice(ctx, priceHint);
     const q = computeQuote({
       mode: 'package', rates, policy, lines: applied.lines, external, risks, addons: applied.addons,
-      package: { code: ctx.pkg.code, price: ctx.pkg.price.min, price_min: ctx.pkg.price.min, price_max: ctx.pkg.price.max, renewal_per_year: ctx.pkg.renewal_per_year },
+      package: { code: ctx.pkg.code, price, price_min: ctx.pkg.price.min, price_max: ctx.pkg.price.max, renewal_per_year: ctx.pkg.renewal_per_year },
     });
     const extras = applied.lines.filter((l) => l.billing === 'extra');
     results.push({
       code: ctx.pkg.code, name: ctx.pkg.name, line: ctx.line.id,
-      package_price: ctx.pkg.price, renewal_per_year: ctx.pkg.renewal_per_year,
+      package_price: ctx.pkg.price, price_used: price, renewal_per_year: ctx.pkg.renewal_per_year,
       eligible: !hard, blocker: hard?.note || null,
       addons: applied.addons,
       extra_lines: extras.map((l) => `${l.title} ×${l.qty}${l.coverage_note ? ' — ' + l.coverage_note : ''}`),

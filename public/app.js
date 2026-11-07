@@ -240,7 +240,7 @@ function renderQuick() {
         <label class="f">Khách hàng<input data-qinfo="customer_name" value="${esc(p.customer_name || '')}"></label>
         <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
       </div>
-      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') : ru.status === 'failed' ? chip('quét lỗi: ' + (ru.error || '').slice(0, 60), 'err') : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
+      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? chip('quét lỗi: ' + (ru.error || '').slice(0, 60), 'err') : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
         <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
       <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
@@ -281,6 +281,16 @@ function renderQuick() {
 const money = (n) => { const a = Math.abs(Number(n) || 0); const s = a >= 1e6 ? (a / 1e6).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) + ' tr' : a ? Math.round(a / 1000).toLocaleString('vi-VN') + 'k' : '0 ₫'; return (n < 0 ? '−' : '') + s; };
 const domainLabel = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || 'web mẫu'; } };
 
+const LEVEL_NAME = { 1: 'Tối giản', 2: 'Cơ bản', 3: 'Tiêu chuẩn', 4: 'Mở rộng', 5: 'Nâng cao', 6: 'Phức tạp', 7: 'Chuyên sâu', 8: 'Cao cấp' };
+// Mức may đo theo độ phức tạp web mẫu (quyết định gói tối thiểu); cho phép chỉnh tay
+function complexityHtml(Q) {
+  const c = Q?.complexity; const lv = Q?.design_level || c?.level;
+  if (!c && !lv) return '';
+  return `<div class="small" style="margin-top:6px">Độ phức tạp: <select data-qlevel title="Mức may đo quyết định gói tối thiểu">${[1, 2, 3, 4, 5, 6, 7, 8].map((m) => `<option value="${m}" ${m === lv ? 'selected' : ''}>M${m} – ${LEVEL_NAME[m]}${c && m === c.level ? ' (đánh giá)' : ''}</option>`).join('')}</select>
+    ${c ? `<span class="muted">${c.score}/${c.max} điểm</span><div class="muted">${esc(c.reasons.join(' · '))}</div>` : ''}</div>
+    ${c?.enterprise && lv === c.level ? `<p class="checks" style="margin:6px 0 0"><span class="warn">⚠️ Quy mô vượt gói HERO 8 — matbao.ws xếp loại <b>Enterprise, báo giá riêng</b>. Giá trên là mức tối thiểu.</span></p>` : ''}`;
+}
+
 // ① Giá sơ bộ cho web giống web mẫu → ② Phát sinh theo tính năng chọn thêm → Tổng
 function priceStepsHtml(P, r, pkg, running) {
   const Q = S.quick;
@@ -297,7 +307,8 @@ function priceStepsHtml(P, r, pkg, running) {
   return `
     <div class="step"><div class="small muted">① Web giống <b>${esc(domainLabel(b.domain))}</b> — đánh giá sơ bộ</div>
       <div class="big2">${vnd(b.price)}</div>
-      <div class="small muted">Gói ${esc(b.package || '')}${b.package_name ? ' – ' + esc(b.package_name) : ''} · ${b.count} tính năng thấy trên web mẫu</div></div>
+      <div class="small muted">Gói ${esc(b.package || '')}${b.package_name ? ' – ' + esc(b.package_name) : ''} · ${b.count} tính năng thấy trên web mẫu</div>
+      ${complexityHtml(Q)}</div>
     <div class="step"><div class="small muted">② Phát sinh theo tính năng chọn thêm</div>
       <div class="big2" style="color:${Q.extra > 0 ? 'var(--accent)' : 'inherit'}">${Q.extra >= 0 ? '+' : '−'} ${vnd(Math.abs(Q.extra))}</div>
       ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : '<div class="small muted">Chưa chọn thêm — tick ở mục 2, mỗi mục ghi sẵn giá cộng thêm.</div>'}
@@ -745,6 +756,7 @@ const ACT = {
     S.briefSug = null; toast(`Đã thêm ${items.length} yêu cầu`); location.hash = `#/p/${pid()}/reqs`;
   }),
   addRef: run(async () => { const r = await api(`/api/projects/${pid()}/refs`, 'POST', { url: val('newRef') }); toast(r.survey_run_id ? 'Đã thêm và bắt đầu khảo sát web này' : 'Đã thêm web tham khảo'); clearFields('newRef'); reload(); }),
+  rescan: run(async (el) => { await api(`/api/projects/${pid()}/survey`, 'POST', { ref_id: Number(el.dataset.id) }); toast('Đang quét lại web mẫu (1–4 phút)'); reload(); }),
   surveyAll: run(async () => { const r = await api(`/api/projects/${pid()}/survey-all`, 'POST', {}); toast(`Đã bắt đầu khảo sát ${r.queued} web`); reload(); }),
   bulkDecide: run(async (el) => {
     const d = el.dataset.d;
@@ -830,7 +842,10 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('change', async (e) => {
   const t = e.target;
   try {
-    if (t.dataset.qfeat) {
+    if ('qlevel' in t.dataset) {
+      await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: true, quantity: Number(t.value) });
+      await reload();
+    } else if (t.dataset.qfeat) {
       await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: t.dataset.qfeat, include: t.checked });
       await reload();
     } else if (t.dataset.qqty) {

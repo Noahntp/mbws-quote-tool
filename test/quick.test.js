@@ -13,7 +13,7 @@ const { run, one } = await import('../server/db.js');
 
 let server; let base;
 before(async () => { await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); }); base = `http://127.0.0.1:${server.address().port}`; });
-after(() => { server?.close(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+after(async () => { server?.close(); const { closeDb } = await import('../server/db.js'); await closeDb(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
 
 const api = async (url, method = 'GET', body) => {
   const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', 'x-user-id': '1' }, body: body ? JSON.stringify(body) : undefined });
@@ -29,16 +29,16 @@ test('tên miền sai bị từ chối, tên miền đúng tạo báo giá đặ
   assert.equal(p.json.refs[0].url, 'https://www.nhahang-mau.vn/');
   assert.equal(p.json.runs[0].status, 'running'); // hiện "đang quét" ngay
   // việc quét nằm trong hàng đợi mới; tiến trình chạy code cũ (tìm analysis_runs.status='queued') không giành được
-  assert.equal(one('SELECT status FROM job_queue WHERE run_id=?', p.json.runs[0].id).status, 'queued');
-  assert.equal(one("SELECT COUNT(*) n FROM analysis_runs WHERE status='queued'").n, 0);
+  assert.equal((await one('SELECT status FROM job_queue WHERE run_id=?', p.json.runs[0].id)).status, 'queued');
+  assert.equal(Number((await one("SELECT COUNT(*) n FROM analysis_runs WHERE status='queued'")).n), 0);
 });
 
 test('giá sơ bộ theo web mẫu, rồi phát sinh khi chọn thêm', async () => {
   const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['nhahang-test.vn'] });
   const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
-  run("UPDATE analysis_runs SET status='running' WHERE id=?", runId); // không để vòng lặp quét thật nhận job
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId); // không để vòng lặp quét thật nhận job // không để vòng lặp quét thật nhận job
   // Giả lập kết quả quét: Zalo & đặt bàn thấy rõ; tích điểm chỉ nhắc trong nội dung
-  ingest({ id: runId, project_id: id, url: 'https://nhahang-test.vn/' }, {
+  await ingest({ id: runId, project_id: id, url: 'https://nhahang-test.vn/' }, {
     ok: true, input: 'https://nhahang-test.vn/', sitemap: {}, coverage: { discovered: 3 },
     templates: [{ template: 'home', kind: 'home', url_count: 1 }, { template: 'contact', kind: 'contact', url_count: 1 }, { template: 'blog:list', kind: 'blog', url_count: 1 }],
     pages: [{ url: 'https://nhahang-test.vn/', template: 'home', captured_at: new Date().toISOString(), desktop: { file: 'a.jpg', hash: 'h', viewport: '1366x900' },

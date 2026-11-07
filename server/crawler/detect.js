@@ -164,6 +164,20 @@ export function detectInPage() {
   const hasCart = !!(addToCart || cartBtn);
   const pageKind = productSchema && hasCart ? 'product_detail' : hasCart && priceMatches.length >= 1 && priceMatches.length <= 4 ? 'product_detail' : priceMatches.length >= 6 ? 'product_list' : null;
 
+  // ---------- Độ phức tạp giao diện (để đánh giá mức may đo M1–M8) ----------
+  const allEls = document.getElementsByTagName('*');
+  const navLinks = qa('header a[href], nav a[href], [class*="menu" i] a[href], [class*="header" i] a[href]').length;
+  const carousels = qa('[class*="swiper" i], [class*="slick" i], [class*="carousel" i], [class*="owl-" i], [class*="splide" i], [class*="slider" i]').filter((e) => isReal(e) && !e.closest('[class*="swiper" i] [class*="swiper" i]')).length;
+  let animated = 0;
+  for (let i = 0, n = Math.min(allEls.length, 2500); i < n; i++) { const cs = getComputedStyle(allEls[i]); if ((cs.animationName && cs.animationName !== 'none') || (cs.transitionDuration && cs.transitionDuration !== '0s')) animated++; }
+  const framework = window.__NEXT_DATA__ || document.getElementById('__next') || scriptSrcs.some((s) => s.includes('/_next/')) || self.__next_f ? 'Next.js' : window.__NUXT__ || document.getElementById('__nuxt') ? 'Nuxt' : document.querySelector('[ng-version]') ? 'Angular' : document.querySelector('[data-reactroot], #root > div') && scriptSrcs.some((s) => /react|chunk|bundle/.test(s)) ? 'React' : document.querySelector('[data-v-app], #app[data-v-]') ? 'Vue' : null;
+  const metrics = {
+    elements: allEls.length, links: links.length, nav_links: navLinks, images: qa('img').length,
+    forms: qa('form').filter(isReal).length, iframes: iframeSrcs.length, carousels, animated,
+    height: Math.round(document.documentElement.scrollHeight), text_len: text.length, framework,
+    languages: Math.max(hreflang.length, langCodes.length),
+  };
+
   const gen = document.querySelector('meta[name=generator]')?.getAttribute('content')
     || (scriptSrcs.some((s) => s.includes('/wp-content/') || s.includes('/wp-includes/')) ? 'WordPress' : scriptSrcs.some((s) => s.includes('cdn.shopify')) ? 'Shopify' : scriptSrcs.some((s) => s.includes('haravan')) ? 'Haravan' : scriptSrcs.some((s) => /bizweb|sapo/.test(s)) ? 'Sapo' : null);
   return {
@@ -175,6 +189,7 @@ export function detectInPage() {
     price_count: priceMatches.length,
     product_schema: productSchema,
     page_kind: pageKind,
+    metrics,
     features: out,
   };
 }

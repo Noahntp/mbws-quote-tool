@@ -2,3 +2,6 @@ node_modules/
 storage/
 *.tmp.mjs
 *.docx
+
+.vercel
+.env*

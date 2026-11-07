@@ -1,10 +1,12 @@
-// Worker khảo sát website tham khảo — chạy như TIẾN TRÌNH CON riêng (cô lập khỏi ứng dụng chính,
-// không mang khóa/secret, có giới hạn thời gian). Đầu vào: argv[2] = đường dẫn file JSON cấu hình.
-// Đầu ra: ghi file JSON kết quả (manifest dẫn chứng) tại config.outFile.
+// Worker khảo sát website tham khảo.
+//  - Máy local: chạy như TIẾN TRÌNH CON riêng (cô lập, không mang khóa/secret): node worker.js <config.json>
+//    → ghi kết quả (manifest dẫn chứng) ra config.outFile.
+//  - Serverless (Vercel): gọi trực tiếp runSurvey(cfg) trong hàm — mỗi lần gọi hàm đã là một môi trường cô lập.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { chromium, devices } from 'playwright';
+import { fileURLToPath } from 'node:url';
+import { launchChromium, devicesPreset } from './browser.js';
 import { normalizeInput, normalizeUrl, isHtmlCandidate, sameSite, dedupeKey, groupTemplates, sampleUrls, parseRobots, robotsAllows, classify } from './urls.js';
 import { assertPublicUrl, assertPublicHost, safeFetchText } from './ssrf.js';
 import { detectInPage } from './detect.js';
@@ -13,8 +15,10 @@ export const CRAWLER_VERSION = 'mbws-crawler/0.1 (playwright 1.56)';
 const UA_TOKEN = 'MBWS-QuoteBot';
 const USER_AGENT_SUFFIX = ` ${UA_TOKEN}/0.1 (+khao sat bao gia noi bo)`;
 
-const cfg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+/** Quét một web mẫu. Trả về manifest dẫn chứng; ảnh chụp ghi vào cfg.assetDir. */
+export async function runSurvey(cfg, opts = {}) {
 const MAX_URLS = Math.min(Math.max(Number(cfg.maxUrls) || 20, 1), 40);
+const SHOT_MAX_H = Math.min(Math.max(Number(cfg.shotMaxHeight) || 6000, 900), 8000);
 const BUDGET_MS = Math.min(Number(cfg.budgetMs) || 240000, 600000);
 const MAX_REQUESTS = 4000;
 const started = Date.now();
@@ -26,19 +30,16 @@ const result = {
   discovered: [], templates: [], pages: [], errors: [], blocked_requests: 0, generator: null,
 };
 
-const log = (...a) => process.stderr.write(`[crawler +${Math.round((Date.now() - started) / 1000)}s] ${a.join(' ')}
-`);
-// watchdog: không để worker chạy quá ngân sách thời gian
-setTimeout(() => { result.errors.push({ error: 'Vượt ngân sách thời gian, dừng cưỡng bức' }); finish(result.pages.length > 0, result.pages.length ? null : 'Hết thời gian'); process.exit(0); }, BUDGET_MS + 30000).unref();
-
-function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
-function finish(ok, fatal) {
+opts.onResult?.(result); // cho phép bên gọi lấy kết quả dở dang khi hết giờ
+const log = opts.log || ((...a) => process.stderr.write(`[crawler +${Math.round((Date.now() - started) / 1000)}s] ${a.join(' ')}\n`));
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const finish = (ok, fatal) => {
   result.ok = ok; if (fatal) result.fatal = fatal;
   result.finished_at = new Date().toISOString();
-  fs.writeFileSync(cfg.outFile, JSON.stringify(result));
-}
+  return result;
+};
+fs.mkdirSync(cfg.assetDir, { recursive: true });
 
-async function main() {
   const start = normalizeInput(cfg.url);
   if (!start) return finish(false, 'URL không hợp lệ');
   try { await assertPublicUrl(start); } catch (e) { return finish(false, e.message); }
@@ -71,6 +72,7 @@ async function main() {
   try {
     const candidates = robots?.sitemaps?.length ? robots.sitemaps.slice(0, 3) : [`${root.origin}/sitemap.xml`, `${root.origin}/sitemap_index.xml`];
     let fetched = 0; const queue = [...candidates];
+    let childSitemaps = 0; let urlsetCount = 0; let urlsetLocs = 0; // để ước lượng quy mô thật
     while (queue.length && fetched < 8 && timeLeft() > 60000) {
       const sm = queue.shift();
       if (!sameSite(sm, rootHost)) continue;
@@ -78,15 +80,21 @@ async function main() {
       fetched++;
       if (!r || r.status !== 200 || !/<(urlset|sitemapindex)/i.test(r.text)) continue;
       const locs = [...r.text.matchAll(/<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]]+?)\s*(?:\]\]>)?\s*<\/loc>/gi)].map((m) => m[1].trim());
-      if (/<sitemapindex/i.test(r.text)) queue.push(...locs.slice(0, 6));
-      else { const name = sm.split('/').pop().toLowerCase(); locs.forEach((l) => { const k = addUrl(l); if (k) sitemapOf.set(k, name); }); }
-      result.sitemap = { status: 'found', urls: discovered.size };
+      if (/<sitemapindex/i.test(r.text)) { childSitemaps += locs.length; queue.push(...locs.slice(0, 6)); }
+      else {
+        urlsetCount++; urlsetLocs += locs.length;
+        const name = sm.split('/').pop().toLowerCase(); locs.forEach((l) => { const k = addUrl(l); if (k) sitemapOf.set(k, name); });
+      }
+      result.sitemap = { ...result.sitemap, status: 'found', urls: discovered.size };
     }
     if (result.sitemap.status !== 'found') result.sitemap = { status: 'not_found', urls: 0 };
+    // Sitemap chính liệt kê N sitemap con mà mới đọc được vài cái → ước lượng tổng URL = N × trung bình URL/sitemap con
+    if (childSitemaps > urlsetCount && urlsetCount) result.sitemap.estimated_urls = Math.min(5_000_000, Math.round((urlsetLocs / urlsetCount) * childSitemaps));
+    result.sitemap.child_sitemaps = childSitemaps;
   } catch (e) { result.sitemap = { status: 'error', error: e.message }; }
 
   log('sitemap', result.sitemap.status, discovered.size);
-  const browser = await chromium.launch({ args: ['--disable-dev-shm-usage', '--no-first-run'] });
+  const browser = await launchChromium();
   let requestCount = 0;
   const guard = async (route) => {
     const req = route.request();
@@ -109,7 +117,7 @@ async function main() {
     return ctx;
   };
   const desktop = await mkContext({ viewport: { width: 1366, height: 900 } });
-  const mobile = await mkContext({ ...devices['iPhone 13'] });
+  const mobile = await mkContext({ ...(await devicesPreset('iPhone 13')) });
 
   const visited = new Set();
   let shot = 0;
@@ -141,14 +149,14 @@ async function main() {
         page.features.push({ feature: null, detail: 'Trang yêu cầu CAPTCHA / bị chặn — không vượt qua', verification: 'unverified' });
       }
       const d = await p.evaluate(detectInPage);
-      page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind;
+      page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind; page.metrics = d.metrics;
       if (!page.blocked) page.features = d.features;
       if (d.generator && !result.generator) result.generator = d.generator;
       d.links.forEach((h) => addUrl(h, finalUrl));
       // ảnh desktop (toàn trang, giới hạn chiều cao) + mobile
       const n = String(++shot).padStart(3, '0');
       const dFile = path.join(cfg.assetDir, `${n}-desktop.jpg`);
-      const height = await p.evaluate(() => Math.min(document.documentElement.scrollHeight, 6000));
+      const height = await p.evaluate((maxH) => Math.min(document.documentElement.scrollHeight, maxH), SHOT_MAX_H);
       const bufD = await p.screenshot({ type: 'jpeg', quality: 55, clip: { x: 0, y: 0, width: 1366, height: Math.max(height, 900) }, fullPage: true, timeout: 15000 });
       fs.writeFileSync(dFile, bufD);
       page.desktop = { file: path.basename(dFile), hash: sha256(bufD), viewport: '1366x900' };
@@ -200,6 +208,7 @@ async function main() {
   result.sitemap.post_urls = smCount(/post|bai-?viet|tin-?tuc|news|blog|article/);
   result.coverage = {
     discovered: result.discovered.length,
+    estimated_urls: Math.max(result.discovered.length, result.sitemap?.estimated_urls || 0),
     read: result.pages.filter((p) => !p.error && !p.blocked).length,
     failed: result.pages.filter((p) => p.error || p.blocked).length,
     template_groups: groupsFinal.length,
@@ -207,7 +216,30 @@ async function main() {
     budget_exhausted: timeLeft() < 15000,
     note: 'Không biết tổng số trang thực tế nên không ghi tỷ lệ hoàn tất 100%.',
   };
-  finish(true);
+  const ms = result.pages.filter((p) => p.metrics && !p.error && !p.blocked).map((p) => p.metrics);
+  const mx = (k) => ms.reduce((m, x) => Math.max(m, x[k] || 0), 0);
+  result.metrics = ms.length ? {
+    pages: ms.length, max_elements: mx('elements'), avg_elements: Math.round(ms.reduce((n, x) => n + x.elements, 0) / ms.length),
+    max_nav_links: mx('nav_links'), max_carousels: mx('carousels'), max_animated: mx('animated'), max_height: mx('height'),
+    max_forms: mx('forms'), max_languages: mx('languages'), framework: ms.find((x) => x.framework)?.framework || null,
+  } : null;
+  return finish(true);
 }
 
-main().then(() => process.exit(0)).catch((e) => { finish(false, e.message); process.exit(1); });
+// ---------- Chạy như tiến trình con: node worker.js <config.json> ----------
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const cfg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  let partial = null;
+  const write = (r) => fs.writeFileSync(cfg.outFile, JSON.stringify(r));
+  const budget = Math.min(Number(cfg.budgetMs) || 240000, 600000);
+  // watchdog: không để worker chạy quá ngân sách thời gian — ghi phần đã quét được rồi dừng
+  setTimeout(() => {
+    const r = partial || { pages: [], errors: [] };
+    r.errors = [...(r.errors || []), { error: 'Vượt ngân sách thời gian, dừng cưỡng bức' }];
+    write({ ...r, ok: (r.pages || []).length > 0, fatal: (r.pages || []).length ? undefined : 'Hết thời gian', finished_at: new Date().toISOString() });
+    process.exit(0);
+  }, budget + 30000).unref();
+  runSurvey(cfg, { onResult: (r) => { partial = r; } })
+    .then((r) => { write(r); process.exit(0); })
+    .catch((e) => { write({ ...(partial || {}), ok: false, fatal: e.message, finished_at: new Date().toISOString() }); process.exit(1); });
+}
