@@ -70,15 +70,47 @@ async function viewProjects() {
 }
 
 // ---------- hồ sơ ----------
-async function openProject(id, keepScroll) {
+// Người dùng đang gõ trong một ô → không được vẽ lại màn hình (mất chữ, mất con trỏ)
+function isEditing() {
+  const a = document.activeElement;
+  return !!a && $app.contains(a) && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button'].includes(a.type)));
+}
+// Ghi nhớ ô đang focus + chữ chưa lưu để khôi phục sau khi vẽ lại
+function keyOf(el) {
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const d = [...el.attributes].find((x) => x.name.startsWith('data-') && x.name !== 'data-k');
+  if (!d) return null;
+  const k = el.getAttribute('data-k');
+  return `[${d.name}="${CSS.escape(d.value)}"]${k ? `[data-k="${CSS.escape(k)}"]` : ''}`;
+}
+function captureUi() {
+  const a = document.activeElement;
+  const focus = a && $app.contains(a) ? { sel: keyOf(a), start: a.selectionStart, end: a.selectionEnd } : null;
+  const dirty = [...$app.querySelectorAll('input[id], textarea[id]')].filter((el) => el.type !== 'checkbox' && el.value !== el.defaultValue).map((el) => [`#${CSS.escape(el.id)}`, el.value]);
+  return { focus, dirty };
+}
+function restoreUi({ focus, dirty }) {
+  for (const [sel, v] of dirty) { const el = $app.querySelector(sel); if (el) el.value = v; }
+  if (focus?.sel) {
+    const el = $app.querySelector(focus.sel);
+    if (el) { el.focus({ preventScroll: true }); try { if (focus.start != null) el.setSelectionRange(focus.start, focus.end); } catch {} }
+  }
+}
+
+async function openProject(id, keepScroll, fromPoll) {
+  if (fromPoll && isEditing()) return; // để lần cập nhật sau
   const y = window.scrollY;
-  S.project = await api(`/api/projects/${id}`);
-  if (S.tab === 'quick') S.rec = await api(`/api/projects/${id}/recommend`).catch(() => null);
+  const project = await api(`/api/projects/${id}`);
+  const rec = S.tab === 'quick' ? await api(`/api/projects/${id}/recommend`).catch(() => null) : S.rec;
+  if (fromPoll && isEditing()) return; // người dùng bắt đầu gõ trong lúc chờ mạng
+  S.project = project; S.rec = rec;
+  const ui = captureUi();
   renderProject();
+  restoreUi(ui);
   if (keepScroll) window.scrollTo(0, y);
   const running = S.project.runs.some((r) => r.status === 'queued' || r.status === 'running');
   clearInterval(S.poll);
-  if (running) S.poll = setInterval(() => openProject(id, true), 4000);
+  if (running) S.poll = setInterval(() => openProject(id, true, true), 4000);
 }
 const reload = () => openProject(S.project.project.id, true);
 
@@ -589,6 +621,8 @@ async function viewMetrics() {
 // ---------- sự kiện ----------
 const pid = () => S.project.project.id;
 const val = (id) => document.getElementById(id)?.value?.trim();
+// Ô "thêm mới" đã dùng xong → trả về rỗng để không bị khôi phục chữ cũ
+const clearFields = (...ids) => ids.forEach((id) => { const el = document.getElementById(id); if (el) el.value = el.defaultValue = ''; });
 const run = (fn) => async (el) => { try { el.disabled = true; await fn(el); } catch (e) { toast(e.message, true); } finally { el.disabled = false; } };
 
 const ACT = {
@@ -621,7 +655,7 @@ const ACT = {
     for (const q of S.briefSug.open_questions || []) await api(`/api/projects/${pid()}/questions`, 'POST', { text: q, blocking: false });
     S.briefSug = null; toast(`Đã thêm ${items.length} yêu cầu`); location.hash = `#/p/${pid()}/reqs`;
   }),
-  addRef: run(async () => { const r = await api(`/api/projects/${pid()}/refs`, 'POST', { url: val('newRef') }); toast(r.survey_run_id ? 'Đã thêm và bắt đầu khảo sát web này' : 'Đã thêm web tham khảo'); reload(); }),
+  addRef: run(async () => { const r = await api(`/api/projects/${pid()}/refs`, 'POST', { url: val('newRef') }); toast(r.survey_run_id ? 'Đã thêm và bắt đầu khảo sát web này' : 'Đã thêm web tham khảo'); clearFields('newRef'); reload(); }),
   surveyAll: run(async () => { const r = await api(`/api/projects/${pid()}/survey-all`, 'POST', {}); toast(`Đã bắt đầu khảo sát ${r.queued} web`); reload(); }),
   bulkDecide: run(async (el) => {
     const d = el.dataset.d;
@@ -630,13 +664,14 @@ const ACT = {
   }),
   delRef: run(async (el) => { if (confirm('Xóa web tham khảo?')) { await api(`/api/refs/${el.dataset.id}`, 'DELETE'); reload(); } }),
   survey: run(async (el) => { await api(`/api/projects/${pid()}/survey`, 'POST', { ref_id: Number(el.dataset.id), max_urls: Number(val('mx' + el.dataset.id)) }); toast('Đã đưa vào hàng đợi khảo sát'); reload(); }),
-  addReq: run(async () => { await api(`/api/projects/${pid()}/requirements`, 'POST', { feature: val('nr_feature'), quantity: val('nr_qty') ? Number(val('nr_qty')) : undefined, acceptance: val('nr_acc') }); reload(); }),
+  addReq: run(async () => { await api(`/api/projects/${pid()}/requirements`, 'POST', { feature: val('nr_feature'), quantity: val('nr_qty') ? Number(val('nr_qty')) : undefined, acceptance: val('nr_acc') }); clearFields('nr_qty', 'nr_acc'); reload(); }),
   delReq: run(async (el) => { if (confirm('Xóa yêu cầu (kèm câu hỏi và dòng dự toán liên quan)?')) { await api(`/api/requirements/${el.dataset.id}`, 'DELETE'); reload(); } }),
-  addQ: run(async () => { await api(`/api/projects/${pid()}/questions`, 'POST', { text: val('nq_text'), blocking: document.getElementById('nq_block').checked }); reload(); }),
+  addQ: run(async () => { await api(`/api/projects/${pid()}/questions`, 'POST', { text: val('nq_text'), blocking: document.getElementById('nq_block').checked }); clearFields('nq_text'); reload(); }),
   genLines: run(async () => { if (S.project.lines.some((l) => l.source === 'auto') && !confirm('Sinh lại sẽ thay toàn bộ dòng tự động (dòng thêm tay được giữ). Tiếp tục?')) return; const r = await api(`/api/projects/${pid()}/estimate/generate`, 'POST', {}); toast(`Đã sinh ${r.lines} dòng`); reload(); }),
   addLine: run(async () => {
     const code = val('nl_code'); const it = S.meta.catalog.items.find((i) => i.code === code);
     await api(`/api/projects/${pid()}/lines`, 'POST', { code: code || null, title: val('nl_title') || it?.title, grp: it?.group || val('nl_grp'), role: it?.role || val('nl_role'), unit: it?.unit, qty: val('nl_qty'), o: val('nl_o') || it?.o, m: val('nl_m') || it?.m, p: val('nl_p') || it?.p, manual_reason: val('nl_reason') });
+    clearFields('nl_title', 'nl_o', 'nl_m', 'nl_p', 'nl_reason');
     reload();
   }),
   delLine: run(async (el) => { const reason = prompt('Lý do xóa dòng?'); if (reason) { await api(`/api/lines/${el.dataset.id}`, 'DELETE'); reload(); } }),
