@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { db, one, all, run, tx, audit, loadJson, activeSetting, ROOT, DATA_DIR } from './db.js';
 import { computeQuote, toJSONSafe } from './pricing.js';
 import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode, featureTiers } from './estimate.js';
-import { normalizeInput } from './crawler/urls.js';
+import { normalizeDomain, domainOf } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
 
@@ -100,8 +100,12 @@ app.get('/api/projects', (req, res) => {
 app.post('/api/projects', h(async (req, res) => {
   need(req, 'project.edit');
   const b = req.body;
-  const firstUrl = [].concat(b.ref_urls || []).map(normalizeInput).find(Boolean);
-  b.name = (b.name || '').trim() || (b.customer_name || '').trim() || (firstUrl ? 'Web giống ' + new URL(firstUrl).hostname.replace(/^www\./, '') : '') || 'Báo giá mới';
+  const rawDomains = [].concat(b.ref_urls || []).map((x) => String(x || '').trim()).filter(Boolean);
+  const bad = rawDomains.find((x) => !normalizeDomain(x));
+  if (bad) throw new HttpError(400, `"${bad}" không phải tên miền hợp lệ — ví dụ: bachhoaxanh.com`);
+  if (!rawDomains.length && !String(b.brief || '').trim() && !String(b.customer_name || '').trim()) throw new HttpError(400, 'Nhập tên miền web mẫu (ví dụ: bachhoaxanh.com)');
+  const firstUrl = rawDomains.map(normalizeDomain)[0];
+  b.name = (b.name || '').trim() || (firstUrl ? domainOf(firstUrl) : '') || (b.customer_name || '').trim() || 'Báo giá mới';
   const pol = parseSetting(activeSetting('policy'));
   const id = tx(() => {
     const n = one('SELECT COUNT(*) n FROM projects').n + 1;
@@ -111,10 +115,10 @@ app.post('/api/projects', h(async (req, res) => {
       JSON.stringify({ mode: 'package', package_code: null, package_price: null, discount_pct: 0, extra_addons: [], recurring: [], risk_override: {}, valid_days: pol?.data.quote_valid_days ?? 30, payment_terms: pol?.data.default_payment_terms || '' }));
     const pid = Number(r.lastInsertRowid);
     const seen = new Set();
-    for (const u of [].concat(b.ref_urls || []).filter(Boolean)) {
-      const url = normalizeInput(u);
-      if (!url || seen.has(url)) continue;
-      seen.add(url);
+    for (const u of rawDomains) {
+      const url = normalizeDomain(u);
+      if (!url || seen.has(domainOf(url))) continue;
+      seen.add(domainOf(url));
       const rr = run('INSERT INTO refs (project_id, url, learn_notes) VALUES (?,?,?)', pid, url, null);
       if (PERMS['survey.run'].includes(req.user.role)) queueSurvey(pid, Number(rr.lastInsertRowid), url, 20, req.user.id);
     }
@@ -239,10 +243,10 @@ const pick = (o, keys) => Object.fromEntries(keys.filter((k) => k in o).map((k) 
 // ---------- Web tham khảo & khảo sát ----------
 app.post('/api/projects/:id/refs', h((req, res) => {
   need(req, 'project.edit');
-  const url = normalizeInput(req.body.url);
-  if (!url) throw new HttpError(400, 'URL không hợp lệ (chỉ http/https)');
+  const url = normalizeDomain(req.body.url);
+  if (!url) throw new HttpError(400, `"${String(req.body.url || '').trim()}" không phải tên miền hợp lệ — ví dụ: bachhoaxanh.com`);
   const pid = Number(req.params.id);
-  if (one('SELECT id FROM refs WHERE project_id=? AND url=?', pid, url)) throw new HttpError(409, 'Web này đã có trong hồ sơ — ghi thêm phần cần học vào ghi chú của URL đó.');
+  if (all('SELECT url FROM refs WHERE project_id=?', pid).some((r) => { try { return domainOf(r.url) === domainOf(url); } catch { return false; } })) throw new HttpError(409, `Tên miền ${domainOf(url)} đã có trong báo giá này.`);
   const r = run('INSERT INTO refs (project_id, url, learn_notes) VALUES (?,?,?)', pid, url, req.body.learn_notes || null);
   const refId = Number(r.lastInsertRowid);
   const queued = PERMS['survey.run'].includes(req.user.role) ? queueSurvey(pid, refId, url, 20, req.user.id) : null;

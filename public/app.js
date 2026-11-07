@@ -56,13 +56,17 @@ async function viewProjects() {
   $app.innerHTML = `
   <h1>Báo giá website</h1>
   ${can('project.edit') ? `<div class="panel">
-    <h3 style="margin-top:0">Tạo báo giá mới</h3>
-    <div class="grid2">
-      <label class="f">Khách hàng<input id="np_customer" placeholder="Tên khách / công ty"></label>
-      <label class="f">Web mẫu khách thích<input id="np_refs" placeholder="https://web-mau.vn"></label>
+    <h3 style="margin-top:0">Báo giá theo web mẫu</h3>
+    <div class="row" style="gap:8px">
+      <input id="np_domain" placeholder="Nhập tên miền web mẫu, ví dụ: bachhoaxanh.com" autocomplete="off" style="flex:1;min-width:240px;font-size:16px;padding:10px 12px">
+      <button class="primary" data-act="createProject" style="padding:10px 20px;font-size:15px">Quét & báo giá</button>
     </div>
-    <label class="f" style="margin-top:8px">Khách cần gì? (tùy chọn)<textarea id="np_brief" placeholder="Ví dụ: web nhà hàng 6 trang, đặt bàn online, chat Zalo, bản đồ, 2 ngôn ngữ Việt – Anh"></textarea></label>
-    <p><button class="primary" data-act="createProject">Tạo & báo giá</button> <span class="muted small">Hệ thống tự quét web mẫu và đọc mô tả để chọn sẵn tính năng.</span></p></div>` : ''}
+    <p class="small muted" style="margin:6px 0 0">Chỉ cần tên miền — hệ thống tự quét web, chọn sẵn tính năng và ra giá theo gói (1–4 phút).</p>
+    <details style="margin-top:8px"><summary class="small">Thêm tên khách / mô tả nhu cầu (không bắt buộc)</summary>
+      <div class="grid2" style="margin-top:8px">
+        <label class="f">Khách hàng<input id="np_customer" placeholder="Tên khách / công ty"></label>
+        <label class="f">Khách cần gì?<input id="np_brief" placeholder="Ví dụ: đặt bàn online, 2 ngôn ngữ"></label>
+      </div></details></div>` : ''}
   <h2>Báo giá đã tạo</h2>
   <div class="panel tablewrap"><table><thead><tr><th>Mã</th><th>Dự án</th><th>Khách hàng</th><th>Phụ trách</th><th>Trạng thái</th><th class="n">Giá dự kiến</th><th>Cập nhật</th></tr></thead><tbody>
   ${rows.map((p) => `<tr><td><a href="#/p/${p.id}">${esc(p.code)}</a></td><td><a href="#/p/${p.id}">${esc(p.name)}</a></td><td>${esc(p.customer_name || '')}</td><td>${esc(p.owner_name || '')}</td><td>${chip(p.status_label, STATUS_CHIP[p.status])}</td><td class="n">${vnd(p.price_net)}</td><td class="small muted">${esc(p.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Chưa có hồ sơ.</td></tr>'}
@@ -230,7 +234,7 @@ function renderQuick() {
         <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
       </div>
       <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') : ru.status === 'failed' ? chip('quét lỗi: ' + (ru.error || '').slice(0, 60), 'err') : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
-        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm web mẫu: https://..." style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
+        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
       <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
     </div>
@@ -675,7 +679,7 @@ const run = (fn) => async (el) => { try { el.disabled = true; await fn(el); } ca
 
 const ACT = {
   createProject: run(async () => {
-    const { id } = await api('/api/projects', 'POST', { customer_name: val('np_customer'), brief: val('np_brief'), ref_urls: (val('np_refs') || '').split(/\s+/).filter(Boolean) });
+    const { id } = await api('/api/projects', 'POST', { customer_name: val('np_customer'), brief: val('np_brief'), ref_urls: [val('np_domain')].filter(Boolean) });
     location.hash = `#/p/${id}`;
   }),
   applyBrief: run(async () => { const r = await api(`/api/projects/${pid()}/brief-apply`, 'POST', { brief: document.getElementById('qBrief').value }); toast(r.found ? `Đã nhận ra ${r.found} tính năng từ mô tả` : 'Không nhận ra tính năng nào — hãy tick tay ở mục 2', !r.found); reload(); }),
@@ -778,6 +782,13 @@ async function savePricing(patch) {
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (el && ACT[el.dataset.act]) { e.preventDefault(); ACT[el.dataset.act](el); }
+});
+// Enter trong ô tên miền = bấm nút
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  const map = { np_domain: 'createProject', newRef: 'addRef' };
+  const act = map[e.target.id];
+  if (act) { e.preventDefault(); const btn = document.querySelector(`[data-act="${act}"]`); if (btn && !btn.disabled) ACT[act](btn); }
 });
 document.addEventListener('change', async (e) => {
   const t = e.target;

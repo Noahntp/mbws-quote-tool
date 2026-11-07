@@ -153,3 +153,23 @@ export function robotsAllows(robots, url) {
   }
   return best ? best.allow : true;
 }
+
+/**
+ * Người dùng chỉ cần gõ tên miền. Nhận "abc.vn", "www.abc.vn", "https://abc.vn/trang-bat-ky"
+ * → trả về trang chủ "https://abc.vn/" (hoặc "https://www.abc.vn/"). Không phải tên miền → null.
+ */
+export function normalizeDomain(raw) {
+  let s = String(raw || '').trim().replace(/\s+/g, '');
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+  let u;
+  try { u = new URL(s); } catch { return null; }
+  if (!['http:', 'https:'].includes(u.protocol)) return null;
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  const labels = host.split('.');
+  const valid = host.length <= 253 && labels.length >= 2 && labels.every((l) => /^[a-z0-9-]{1,63}$/.test(l) && !l.startsWith('-') && !l.endsWith('-'))
+    && /^(xn--[a-z0-9-]+|[a-z]{2,63})$/.test(labels[labels.length - 1]); // đuôi tên miền là chữ (không nhận địa chỉ IP)
+  if (!valid) return null;
+  return `${u.protocol}//${host}${u.port ? ':' + u.port : ''}/`;
+}
+export const domainOf = (url) => new URL(url).hostname.replace(/^www\./, '');
