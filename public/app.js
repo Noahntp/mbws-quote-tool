@@ -212,7 +212,11 @@ function packageCapacity(code) {
   const crit = x.l.criteria.find((c) => /bố cục trang web/i.test(c.title));
   const lv = (String(x.p.features?.[crit?.no] || '').match(/S(\d)/) || [])[1];
   const pages = lv ? S.meta.catalog.sitemap_capacity[lv] : null;
-  return { pages, products: x.p.products, posts: x.p.posts, hosting: x.p.hosting, sitemap: x.p.features?.[crit?.no] };
+  // HERO 6–8 ghi "Theo dự án" → tính như mức GB cao nhất có niêm yết (giống máy chủ)
+  const gb = (v) => { const m = String(v || '').match(/(\d+(?:[.,]\d+)?)\s*GB/i); return m ? Number(m[1].replace(',', '.')) : null; };
+  const maxGb = Math.max(0, ...packageOrder().map((y) => gb(y.p.hosting) || 0));
+  const hosting = gb(x.p.hosting) != null ? `${gb(x.p.hosting)} GB` : `~${maxGb} GB (theo dự án)`;
+  return { pages, products: x.p.products, posts: x.p.posts, hosting, hosting_short: hosting.replace(/ \(theo dự án\)/, ''), sitemap: x.p.features?.[crit?.no] };
 }
 const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm cần nhập'], ['DATA_POSTS', 'Số bài viết cần nhập'], ['HOSTING_STORAGE', 'Dung lượng hosting (GB)']];
 
@@ -262,7 +266,7 @@ function renderQuick() {
   const qty = ([code, label]) => {
     const rq = reqBy[code]; const on = rq?.decision === 'include';
     const gb = code === 'HOSTING_STORAGE';
-    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : gb ? (cap?.hosting ? 'gói: ' + cap.hosting : 'theo gói') : 'không';
+    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : gb ? (cap?.hosting_short ? 'gói gồm ' + cap.hosting_short : 'theo gói') : 'không';
     const c = gb && on ? covOf(rq) : null; // dung lượng vượt gói → ghi rõ phần mua thêm
     return `<label class="f">${label}<input type="number" min="0" ${gb ? 'step="0.5"' : ''} class="num" data-qqty="${code}" style="width:130px" value="${on ? esc(rq.quantity ?? '') : ''}" placeholder="${esc(hint)}">${c && c.status !== 'included' ? `<span class="small" style="color:var(--accent)">${esc(c.note)}</span>` : ''}</label>`;
   };
