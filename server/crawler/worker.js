@@ -14,7 +14,9 @@ import { layoutSignatureInPage, clusterLayouts } from './layout.js';
 
 export const CRAWLER_VERSION = 'mbws-crawler/0.1 (playwright 1.56)';
 const UA_TOKEN = 'MBWS-QuoteBot';
-const USER_AGENT_SUFFIX = ` ${UA_TOKEN}/0.1 (+khao sat bao gia noi bo)`;
+// Tên tự xưng công khai của bộ quét. Trước dùng "Chrome … + MBWS-QuoteBot/0.1 (+…)": tường lửa (Plesk / nền tảng Mắt Bão)
+// coi kiểu "giả trình duyệt nhưng có chữ bot" là công cụ tấn công → HTTP 403. Đúng chuỗi "MBWS-QuoteBot" thì được phép.
+const BOT_UA = process.env.CRAWLER_USER_AGENT || UA_TOKEN;
 
 /** Quét một web mẫu. Trả về manifest dẫn chứng; ảnh chụp ghi vào cfg.assetDir. */
 
@@ -134,8 +136,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     return route.continue();
   };
   const mkContext = async (opts) => {
-    const ua = (opts.userAgent || `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browser.version()} Safari/537.36`);
-    const ctx = await browser.newContext({ ...opts, javaScriptEnabled: !staticMode, userAgent: ua + USER_AGENT_SUFFIX, acceptDownloads: false, serviceWorkers: 'block', locale: 'vi-VN' });
+    const ctx = await browser.newContext({ ...opts, javaScriptEnabled: !staticMode, userAgent: BOT_UA, acceptDownloads: false, serviceWorkers: 'block', locale: 'vi-VN' });
     await ctx.route('**/*', guard);
     return ctx;
   };
@@ -158,7 +159,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     try { return await desktop.newPage(); } catch (e) { log('mở tab lỗi:', e.message.split('\n')[0].slice(0, 120)); await ensureBrowser(true); return desktop.newPage(); }
   };
   // Web cắt kết nối / không phản hồi máy quét (thường chặn IP máy chủ đám mây, nước ngoài) — quét tĩnh cũng không giúp
-  const NET_BLOCK = /ERR_CONNECTION_RESET|ERR_CONNECTION_REFUSED|ERR_CONNECTION_CLOSED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|ERR_ADDRESS_UNREACHABLE|ERR_SSL_PROTOCOL_ERROR|Timeout \d+ms exceeded/i;
+  const NET_BLOCK = /ERR_CONNECTION_RESET|ERR_CONNECTION_REFUSED|ERR_CONNECTION_CLOSED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|ERR_ADDRESS_UNREACHABLE|ERR_SSL_PROTOCOL_ERROR/i; // (quá thời gian chờ không tính: web chậm vẫn có thể đọc bằng HTML tĩnh)
   const CRASH = /Target page, context or browser has been closed|Target closed|browser has disconnected|has crashed|Page crashed/i;
 
   const visited = new Set();
