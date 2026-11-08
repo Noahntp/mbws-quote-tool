@@ -118,7 +118,8 @@ function keyOf(el) {
 function captureUi() {
   const a = document.activeElement;
   const focus = a && $app.contains(a) ? { sel: keyOf(a), start: a.selectionStart, end: a.selectionEnd } : null;
-  const dirty = [...$app.querySelectorAll('input[id], textarea[id]')].filter((el) => el.type !== 'checkbox' && el.value !== el.defaultValue).map((el) => [`#${CSS.escape(el.id)}`, el.value]);
+  const dirty = [...$app.querySelectorAll('input, textarea')].filter((el) => !['checkbox', 'radio', 'button', 'file'].includes(el.type) && el.value !== el.defaultValue)
+    .map((el) => [keyOf(el), el.value]).filter(([k]) => k);
   return { focus, dirty };
 }
 function restoreUi({ focus, dirty }) {
@@ -937,6 +938,7 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if ((t.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(t.type)) || t.tagName === 'TEXTAREA') t.defaultValue = t.value;
   try {
     if (t.dataset.measure) {
       await api(`/api/projects/${pid()}/measure`, 'POST', { key: t.dataset.measure, band: Number(t.value) });
@@ -954,7 +956,7 @@ document.addEventListener('change', async (e) => {
     } else if (t.dataset.qinfo) {
       const val = t.dataset.qinfo === 'budget' ? parseMoney(t.value) : t.value;
       if (t.dataset.qinfo === 'budget' && t.value.trim() && val == null) { toast('Ngân sách không hợp lệ — ví dụ: 10tr, 7,5 triệu, 10.000.000', true); return; }
-      await api(`/api/projects/${pid()}`, 'PUT', { [t.dataset.qinfo]: val, rev: S.project.project.rev });
+      await api(`/api/projects/${pid()}`, 'PUT', { [t.dataset.qinfo]: val });
       await reload();
     } else if (t.dataset.rq) {
       await api(`/api/requirements/${t.dataset.rq}`, 'PUT', { [t.dataset.k]: t.dataset.k === 'quantity' ? (t.value === '' ? null : Number(t.value)) : t.value });
