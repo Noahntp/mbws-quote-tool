@@ -247,9 +247,13 @@ export async function activeSetting(kind, at = new Date().toISOString().slice(0,
 export function ready() {
   if (!readyPromise) readyPromise = (async () => {
     driver = await makeDriver();
-    if (IS_PG) { await driver.exec(PG_PRELUDE); await driver.exec(pgSchema(SCHEMA)); } else await driver.exec(SCHEMA);
-    const q1 = async (sql, ...a) => (await driver.query(sql, a)).rows[0];
-    const r1 = async (sql, ...a) => driver.query(sql, a);
+    // Postgres dùng chung (Vercel nhiều máy khởi động cùng lúc): khóa advisory để chỉ một máy tạo bảng / dữ liệu mẫu tại một thời điểm
+    let c = null;
+    if (DRIVER === 'pg') { c = await driver.begin(); await c.query('SELECT pg_advisory_xact_lock(727201)'); }
+    try {
+    if (c) { await c.query(PG_PRELUDE); await c.query(pgSchema(SCHEMA)); } else if (IS_PG) { await driver.exec(PG_PRELUDE); await driver.exec(pgSchema(SCHEMA)); } else await driver.exec(SCHEMA);
+    const q1 = async (sql, ...a) => (await driver.query(sql, a, c || undefined)).rows[0];
+    const r1 = async (sql, ...a) => driver.query(sql, a, c || undefined);
     if (!Number((await q1('SELECT COUNT(*) n FROM users')).n)) {
       for (const [name, role] of [['Sales A', 'sales'], ['Kỹ thuật B', 'tech'], ['Quản lý giá C', 'pricing_manager'], ['Quản trị', 'admin']]) await r1('INSERT INTO users (name, role) VALUES (?,?)', name, role);
     }
@@ -263,6 +267,8 @@ export function ready() {
         JSON.stringify({ target_margin_pct: 30, min_margin_pct: 25, overhead_pct: 0, package_cost_pct: 60, rounding_step: 1000, rounding_mode: 'up', vat_pct: 10, sales_max_discount_pct: 5, hosting_gb_price_year: 500000, quote_valid_days: 30, default_payment_terms: '50% khi ký hợp đồng, 50% khi nghiệm thu bàn giao' }),
         'Biên mục tiêu 30%, tối thiểu 25%, VAT 10% (cần kế toán xác nhận theo hạng mục). Sales được giảm tối đa 5%, vượt mức cần quản lý giá duyệt. package_cost_pct=60: GIẢ ĐỊNH chi phí nội bộ của gói chuẩn bằng 60% giá niêm yết — cần xác nhận. hosting_gb_price_year=500.000đ: GIẢ ĐỊNH giá thêm 1 GB hosting/năm (matbao.ws chưa niêm yết).');
     }
+    if (c) await driver.commit(c);
+    } catch (e) { if (c) await driver.rollback(c); throw e; }
   })().catch((e) => { readyPromise = null; throw e; });
   return readyPromise;
 }
