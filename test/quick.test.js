@@ -170,3 +170,34 @@ test('ngân sách khách lưu dạng số; tự điền số sản phẩm / bài
   assert.equal(by('DATA_PRODUCTS').quantity, 50);
   assert.equal(by('DATA_POSTS').quantity, 30);
 });
+
+test('vượt ngân sách → đề xuất phương án vừa ngân sách, áp dụng được; gói chọn tay tách riêng khỏi phát sinh', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['brand-mau.vn'] });
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId);
+  await ingest({ id: runId, project_id: id, url: 'https://brand-mau.vn/' }, {
+    ok: true, input: 'https://brand-mau.vn/', sitemap: { status: 'found' }, coverage: { discovered: 90 },
+    templates: [{ template: 'home', kind: 'home', url_count: 1 }, { template: 'about', kind: 'about', url_count: 1 }],
+    metrics: { pages: 3, max_elements: 3500, max_nav_links: 70, max_languages: 2, framework: null },
+    pages: [{ url: 'https://brand-mau.vn/', template: 'home', captured_at: new Date().toISOString(), features: [
+      { feature: 'MULTILANG', detail: 'VI | EN', verification: 'observed' }, { feature: 'BOOKING', detail: 'Đặt lịch', verification: 'observed' },
+      { feature: 'LOYALTY', detail: 'Tích điểm', verification: 'observed' }, { feature: 'SEARCH', detail: 'Tìm kiếm', verification: 'observed' }] }],
+  });
+  // sale chọn tay gói đắt hơn → hiện riêng "gói chọn tay", không tính là phát sinh tính năng
+  await api(`/api/projects/${id}`, 'PUT', { pricing: { package_code: 'HERO 8', package_price: null } });
+  let q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.equal(q.package_choice.manual, 'HERO 8');
+  assert.ok(q.package_choice.diff > 0);
+  assert.equal(q.changes.length, 0);
+  // ngân sách thấp → có phương án vừa ngân sách
+  await api(`/api/projects/${id}`, 'PUT', { budget: 12000000 });
+  q = (await api(`/api/projects/${id}/quick`)).json;
+  const plan = q.budget_plan.plans.find((p) => p.fits);
+  assert.ok(plan, JSON.stringify(q.budget_plan));
+  assert.ok(plan.price <= q.budget_plan.target);
+  assert.equal((await api(`/api/projects/${id}/apply-plan`, 'POST', plan.apply)).status, 200);
+  const after = (await api(`/api/projects/${id}`)).json;
+  assert.ok(Number(after.preview.total_incl_vat) <= 12000000, `sau khi áp dụng: ${after.preview.total_incl_vat}`);
+  assert.equal(after.project.pricing.package_code, null); // bỏ gói chọn tay
+  assert.equal((await api(`/api/projects/${id}/quick`)).json.budget_plan, null); // đã vừa ngân sách
+});

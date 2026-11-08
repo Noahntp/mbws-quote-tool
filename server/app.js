@@ -618,6 +618,79 @@ async function designOptions(pid, b, current) {
   return { mode: dl.decision === 'include' ? 'match' : 'economy', level, match: { price: m.price, package: m.package, package_name: m.package_name }, economy: { price: e.price, package: e.package, package_name: e.package_name } };
 }
 
+// Đề xuất vừa ngân sách khách (giá trước VAT ≤ target). Thứ tự ưu tiên giữ cho khách:
+//  A. giữ đủ tính năng — hạ mức thiết kế (rồi tới "Tiết kiệm") tới khi vừa;
+//  B. giữ mức thiết kế hiện tại — bỏ bớt tính năng, mỗi bước bỏ mục giảm giá nhiều nhất;
+//  C. không cách nào vừa → phương án thấp nhất (tiết kiệm + bỏ tính năng) và số còn vượt.
+const KEEP_FEATURES = new Set(['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE', 'DESIGN_LEVEL']);
+async function planForBudget(pid, b, current, target) {
+  const cat = catalog();
+  const title = (code) => cat.features.find((f) => f.code === code)?.title || code;
+  const dl = current.find((r) => r.feature === 'DESIGN_LEVEL');
+  const curLevel = dl?.decision === 'include' ? Number(dl.quantity || 1) : 0;
+  const withDesign = (reqs, lv) => reqs.map((r) => (r.feature === 'DESIGN_LEVEL' ? { ...r, decision: lv ? 'include' : 'exclude', quantity: lv || r.quantity } : r));
+  const sim = async (reqs) => (await simulatePrice(pid, b, reqs, { autoPackage: true }));
+  const plans = [];
+  // A: hạ mức thiết kế
+  if (dl) {
+    for (let lv = curLevel - 1; lv >= 0; lv--) {
+      const s = await sim(withDesign(current, lv));
+      if (s.price <= target) { plans.push({ kind: 'design', label: lv ? `Giữ đủ tính năng, giao diện mức M${lv}` : 'Giữ đủ tính năng, giao diện mẫu dựng sẵn (Tiết kiệm)', price: s.price, package: s.package, apply: { level: lv, exclude: [] }, removed: [] }); break; }
+    }
+  }
+  // B/C: bỏ bớt tính năng (tham lam: mỗi bước bỏ mục giảm nhiều nhất)
+  const greedy = async (startLevel) => {
+    let reqs = withDesign(current, startLevel); let s = await sim(reqs); const removed = [];
+    for (let step = 0; step < 8 && s.price > target; step++) {
+      let best = null;
+      for (const r of reqs.filter((x) => x.decision === 'include' && x.feature && !KEEP_FEATURES.has(x.feature))) {
+        const alt = reqs.map((x) => (x === r ? { ...x, decision: 'exclude' } : x));
+        const t = await sim(alt);
+        if (t.price < s.price && (!best || t.price < best.s.price)) best = { r, s: t, alt };
+      }
+      if (!best) break;
+      removed.push({ code: best.r.feature, title: title(best.r.feature), saving: s.price - best.s.price });
+      reqs = best.alt; s = best.s;
+    }
+    return { price: s.price, package: s.package, removed };
+  };
+  if (curLevel) {
+    const g = await greedy(curLevel);
+    if (g.price <= target && g.removed.length) plans.push({ kind: 'features', label: `Giữ giao diện M${curLevel}, bỏ ${g.removed.length} tính năng`, ...g, apply: { level: curLevel, exclude: g.removed.map((x) => x.code) } });
+  }
+  if (!plans.length) {
+    const g = await greedy(0);
+    const fits = g.price <= target;
+    plans.push({ kind: fits ? 'features' : 'minimum', label: fits ? `Giao diện mẫu dựng sẵn, bỏ ${g.removed.length} tính năng` : 'Thấp nhất có thể (giao diện dựng sẵn, bỏ bớt tính năng)', ...g, fits, apply: { level: 0, exclude: g.removed.map((x) => x.code) } });
+  }
+  for (const p of plans) if (p.fits === undefined) p.fits = true;
+  return { target, plans };
+}
+
+// Áp dụng phương án vừa ngân sách: đặt mức thiết kế (0 = Tiết kiệm), bỏ các tính năng đã chọn, bỏ gói chọn tay
+app.post('/api/projects/:id/apply-plan', h(async (req, res) => {
+  need(req, 'requirement.decide');
+  const pid = Number(req.params.id);
+  const level = Number(req.body.level || 0);
+  const exclude = Array.isArray(req.body.exclude) ? req.body.exclude.filter((x) => typeof x === 'string' && !KEEP_FEATURES.has(x)) : [];
+  if (!(level >= 0 && level <= 8)) throw new HttpError(400, 'Mức thiết kế không hợp lệ');
+  await tx(async () => {
+    const p = await projectOr404(pid, 'pricing_json');
+    const pricing = JSON.parse(p.pricing_json || '{}');
+    const dl = await one("SELECT * FROM requirements WHERE project_id=? AND feature='DESIGN_LEVEL'", pid);
+    if (dl) await run("UPDATE requirements SET decision=?, quantity=?, updated_at=datetime('now') WHERE id=?", level ? 'include' : 'exclude', level || dl.quantity, dl.id);
+    for (const f of exclude) {
+      const r = await one("SELECT id FROM requirements WHERE project_id=? AND feature=? AND decision='include'", pid, f);
+      if (r) { await run("UPDATE requirements SET decision='exclude', updated_at=datetime('now') WHERE id=?", r.id); await run("UPDATE questions SET status='dropped' WHERE requirement_id=? AND status='open'", r.id); }
+    }
+    pricing.package_code = null; pricing.package_price = null;
+    await run("UPDATE projects SET pricing_json=?, rev=rev+1, updated_at=datetime('now') WHERE id=?", JSON.stringify(pricing), pid);
+    await audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'apply_budget_plan', after: { level, exclude } });
+    await syncAutoLines(pid);
+  });
+  res.json({ ok: true });
+}));
+
 // Sale chỉnh một tiêu chí đo lường (vd. sitemap không đọc được → chọn đúng quy mô). band=null → quay về số đo tự động.
 app.post('/api/projects/:id/measure', h(async (req, res) => {
   need(req, 'requirement.decide');
@@ -688,8 +761,16 @@ app.get('/api/projects/:id/quick', h(async (req, res) => {
   }
   const options = await designOptions(pid, b, current);
   const officialNow = Number((await projectState(pid)).preview.price_net ?? 0);
+  // Gói chọn tay khác gói đề xuất → tách riêng khỏi "phát sinh theo tính năng"
+  let packageChoice = null;
+  if (b.pricing.package_code) {
+    const auto = await simulatePrice(pid, b, current, { autoPackage: true });
+    if (auto.package && auto.package !== b.pricing.package_code) packageChoice = { manual: b.pricing.package_code, auto: auto.package, auto_price: auto.price, diff: officialNow - auto.price };
+  }
+  const vatPct = Number(b.input.policy?.vat_pct ?? 10);
+  const budgetPlan = b.p.budget && officialNow * (1 + vatPct / 100) > Number(b.p.budget) ? await planForBudget(pid, b, current, Math.floor(Number(b.p.budget) / (1 + vatPct / 100))) : null;
   res.json({
-    options, volumes: b.pricing.volumes || null, budget: b.p.budget ?? null,
+    options, volumes: b.pricing.volumes || null, budget: b.p.budget ?? null, package_choice: packageChoice, budget_plan: budgetPlan,
     baseline: baseline ? { ...baseline, price: base.price, package: base.package, package_name: base.package_name, count: Object.keys(baseline.features || {}).filter((f) => !QTY_FEATURES.has(f)).length } : null,
     complexity: refreshAssessment(b.pricing.complexity),
     design_level: Number(b.reqs.find((r) => r.feature === 'DESIGN_LEVEL' && r.decision === 'include')?.quantity || 0) || null,

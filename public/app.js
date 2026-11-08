@@ -342,9 +342,14 @@ function budgetHtml(P, r) {
   if (!b || !r) return '';
   const price = Number(r.total_incl_vat || 0); const O = S.quick?.options;
   if (price <= b) return `<div class="small" style="margin-top:8px">${chip('Trong ngân sách', 'ok')} Ngân sách khách ${vnd(b)} · còn dư ${money(b - price)} <span class="muted">(so với giá đã gồm VAT)</span></div>`;
-  const ecoVat = O ? Math.round(O.economy.price * (1 + Number(r.vat_pct || 0) / 100)) : null;
-  const tip = O && O.mode === 'match' && ecoVat <= b ? `Phương án <b>Tiết kiệm</b> (${money(ecoVat)} gồm VAT) vừa ngân sách.` : 'Bỏ bớt tính năng ở mục 2 (mỗi mục ghi sẵn giá) hoặc giảm số lượng để vừa ngân sách.';
-  return `<div class="small" style="margin-top:8px">${chip('Vượt ngân sách ' + money(price - b), 'err')} Ngân sách khách ${vnd(b)} <span class="muted">(so với giá đã gồm VAT)</span>. ${tip}</div>`;
+  const vat = (n) => Math.round(Number(n) * (1 + Number(r.vat_pct || 0) / 100));
+  const plans = S.quick?.budget_plan?.plans || [];
+  const card = (p, i) => `<div class="plan ${p.fits ? '' : 'nofit'}"><div><b>${p.fits ? `Phương án ${i + 1}` : 'Không vừa'}: ${esc(p.label)}</b> — <b>${money(vat(p.price))}</b> gồm VAT${p.package ? ` · gói ${esc(p.package)}` : ''}
+    ${p.removed?.length ? `<div class="small muted">Bỏ: ${p.removed.map((x) => `${esc(x.title)} (−${money(vat(x.saving))})`).join(', ')}</div>` : ''}
+    ${p.fits ? '' : `<div class="small">Vẫn vượt ${money(vat(p.price) - b)} — cần trao đổi lại phạm vi hoặc ngân sách với khách.</div>`}</div>
+    <button class="primary small" data-act="applyPlan" data-plan="${i}" ${can('requirement.decide') ? '' : 'disabled'}>Áp dụng</button></div>`;
+  return `<div class="small" style="margin-top:8px">${chip('Vượt ngân sách ' + money(price - b), 'err')} Ngân sách khách ${vnd(b)} <span class="muted">(so với giá đã gồm VAT)</span>.</div>
+    ${plans.length ? `<div class="plans"><div class="small muted">Đề xuất vừa ngân sách:</div>${plans.map(card).join('')}</div>` : ''}`;
 }
 // "10tr", "7,5 triệu", "10.000.000", "500k" → số đồng
 function parseMoney(v) {
@@ -410,8 +415,9 @@ function priceStepsHtml(P, r, pkg, running) {
       ${optionsHtml(Q)}</div>
     <div class="step"><div class="small muted">② Phát sinh theo tính năng chọn thêm</div>
       <div class="big2" style="color:${Q.extra > 0 ? 'var(--accent)' : 'inherit'}">${Q.extra >= 0 ? '+' : '−'} ${vnd(Math.abs(Q.extra))}</div>
-      ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : '<div class="small muted">Chưa chọn thêm — tick ở mục 2, mỗi mục ghi sẵn giá cộng thêm.</div>'}
-      ${Q.current.package && Q.current.package !== b.package ? `<div class="small">Gói chuyển: ${esc(b.package)} → <b>${esc(Q.current.package)}</b></div>` : ''}</div>
+      ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : `<div class="small muted">Chưa chọn thêm tính năng — tick ở mục 2, mỗi mục ghi sẵn giá cộng thêm.${Q.package_choice ? ' Chênh lệch ở trên là do gói chọn tay.' : ''}</div>`}
+      ${Q.package_choice ? `<div class="small" style="margin-top:4px">${chip('Gói chọn tay', 'warn')} <b>${esc(Q.package_choice.manual)}</b> thay cho gói đề xuất ${esc(Q.package_choice.auto)} (${money(Q.package_choice.auto_price)}): ${Q.package_choice.diff >= 0 ? '+' : '−'}${money(Math.abs(Q.package_choice.diff))} <button class="link small" data-act="useAutoPkg">Dùng gói đề xuất</button></div>`
+        : Q.current.package && Q.current.package !== b.package ? `<div class="small">Gói chuyển: ${esc(b.package)} → <b>${esc(Q.current.package)}</b></div>` : ''}</div>
     <div class="step total"><div class="small muted">Tổng báo giá${pkg ? ` · gói ${esc(pkg.code)}` : ''}</div>
       <div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>
       ${ch.length && can('pricing.edit') ? `<button class="link small" data-act="setBaseline" title="Dùng khi khách chốt phạm vi mới làm mốc">↺ Lấy lựa chọn hiện tại làm giá gốc</button>` : ''}</div>`;
@@ -855,6 +861,13 @@ const ACT = {
     S.briefSug = null; toast(`Đã thêm ${items.length} yêu cầu`); location.hash = `#/p/${pid()}/reqs`;
   }),
   addRef: run(async () => { const r = await api(`/api/projects/${pid()}/refs`, 'POST', { url: val('newRef') }); toast(r.survey_run_id ? 'Đã thêm và bắt đầu khảo sát web này' : 'Đã thêm web tham khảo'); clearFields('newRef'); reload(); }),
+  applyPlan: run(async (el) => {
+    const p = S.quick?.budget_plan?.plans?.[Number(el.dataset.plan)];
+    if (!p) return;
+    await api(`/api/projects/${pid()}/apply-plan`, 'POST', p.apply);
+    toast('Đã áp dụng phương án theo ngân sách'); await reload();
+  }),
+  useAutoPkg: run(async () => { await savePricing({ package_code: null, package_price: null }); }),
   designMode: run(async (el) => { await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: el.dataset.mode === 'match' }); await reload(); }),
   rescan: run(async (el) => { await api(`/api/projects/${pid()}/survey`, 'POST', { ref_id: Number(el.dataset.id) }); toast('Đang quét lại web mẫu (1–4 phút)'); reload(); }),
   surveyAll: run(async () => { const r = await api(`/api/projects/${pid()}/survey-all`, 'POST', {}); toast(`Đã bắt đầu khảo sát ${r.queued} web`); reload(); }),

@@ -80,3 +80,9 @@ table.rubric { margin-top: 6px; } table.rubric td { vertical-align: top; } table
 .opt b { font-size: 18px; font-variant-numeric: tabular-nums; }
 .opt.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .opt:disabled { cursor: default; }
+
+/* Đề xuất vừa ngân sách */
+.plans { margin-top: 6px; display: grid; gap: 6px; }
+.plan { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px solid var(--ok); background: var(--ok-bg); border-radius: 8px; padding: 6px 10px; }
+.plan.nofit { border-color: var(--err); background: var(--err-bg); }
+.plan button { white-space: nowrap; }
