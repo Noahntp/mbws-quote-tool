@@ -243,8 +243,10 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       if (browser.isConnected()) await openContexts(); else await ensureBrowser();
       const st = await visit(start, 'home', 'home');
       const usable = st && !st.error && !st.blocked && ((st.metrics?.elements || 0) >= 300 || (st.links_count || 0) >= 20);
+      log('HTML tĩnh:', st?.status, JSON.stringify(st?.title || ''), st?.final_url || '', 'phần tử', st?.metrics?.elements, 'link', st?.links_count, st?.blocked || st?.error || '', usable ? '→ dùng được' : '→ không dùng được');
       if (usable) { home = st; result.static_mode = { reason: why }; }
-      else home = { ...home, blocked: home.blocked, error: home.error };
+      else if (st?.blocked) home = { ...home, error: null, blocked: `${st.blocked}, cả khi tắt JavaScript` };
+      else if (st && !st.error) home = { ...home, error: null, blocked: `chỉ trả trang gần như rỗng cho máy quét (~${st.metrics?.elements || 0} phần tử) — có thể chặn IP máy chủ đám mây / nước ngoài` };
     }
     // Vẫn không đọc được → dừng: kết quả rỗng sẽ cho giá sai
     if (home?.blocked) homeFail = `Web mẫu chặn máy quét (${home.blocked}). Thử "Quét lại" sau, quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
