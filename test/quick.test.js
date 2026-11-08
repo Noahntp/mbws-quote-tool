@@ -223,3 +223,16 @@ test('ngân sách: nhiều tính năng cùng cần gói cao → bỏ cả nhóm 
   assert.ok(Number(after.preview.total_incl_vat) <= 10000000, `sau áp dụng ${after.preview.total_incl_vat}`);
   assert.equal(after.requirements.find((r) => r.feature === 'DATA_POSTS').quantity, plan.apply.set_qty.DATA_POSTS);
 });
+
+test('bộ quét Việt Nam: báo còn sống trong 1 phút thì Vercel nhường việc; quá hạn coi như tắt', async () => {
+  const { scanWorkerStatus } = await import('../server/jobs.js');
+  await run("DELETE FROM app_kv WHERE key='scan_worker'");
+  assert.equal(await scanWorkerStatus(), null);
+  await run("INSERT INTO app_kv (key, value, updated_at) VALUES ('scan_worker', ?, datetime('now'))", JSON.stringify({ host: 'may-vn', started_at: 'x' }));
+  let w = await scanWorkerStatus();
+  assert.equal(w.alive, true); assert.equal(w.host, 'may-vn');
+  await run("UPDATE app_kv SET updated_at='2020-01-01 00:00:00' WHERE key='scan_worker'");
+  w = await scanWorkerStatus();
+  assert.equal(w.alive, false);
+  await run("DELETE FROM app_kv WHERE key='scan_worker'");
+});

@@ -10,7 +10,7 @@ import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
 import { refreshAssessment, assessComplexity, RUBRIC } from './complexity.js';
 import { mountAuth } from './auth.js';
-import { captureBaseline, enqueueRun, kickQueue } from './jobs.js';
+import { captureBaseline, enqueueRun, kickQueue, scanWorkerStatus } from './jobs.js';
 
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -73,6 +73,7 @@ app.get('/api/meta', h(async (req, res) => {
     settings: (await all('SELECT s.*, u.name approved_by_name FROM settings_versions s LEFT JOIN users u ON u.id=s.approved_by ORDER BY kind, effective_from DESC, id DESC')).map(parseSetting),
     perms: Object.fromEntries(Object.entries(PERMS).map(([k, roles]) => [k, roles.includes(req.user.role)])),
     storage: { persistent: PERSISTENT, driver: DRIVER },
+    scanner: IS_SERVERLESS ? { worker: await scanWorkerStatus().catch(() => null), cloud: 'Vercel (Mỹ)' } : { local: true },
     measure_rubric: RUBRIC.map((r) => ({ key: r.key, title: r.title, how: r.how, bands: r.bands.map((b) => ({ label: b.label, pts: b.pts })) })),
   });
 }));

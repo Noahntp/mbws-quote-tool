@@ -286,7 +286,8 @@ function renderQuick() {
         <label class="f">Ngân sách của khách<input data-qinfo="budget" inputmode="decimal" value="${p.budget ? esc(Number(p.budget).toLocaleString('vi-VN')) : ''}" placeholder="vd: 10tr hoặc 10.000.000"></label>
       </div>
       <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
-        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div></div>
+        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div>
+        ${scannerHtml()}</div>
       ${measureTableHtml(S.quick)}
       <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
@@ -334,6 +335,14 @@ const money = (n) => { const a = Math.abs(Number(n) || 0); const s = a >= 1e6 ? 
 const domainLabel = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || 'web mẫu'; } };
 
 const LEVEL_NAME = { 1: 'Tối giản', 2: 'Cơ bản', 3: 'Tiêu chuẩn', 4: 'Mở rộng', 5: 'Nâng cao', 6: 'Phức tạp', 7: 'Chuyên sâu', 8: 'Cao cấp' };
+// Bộ quét đang dùng: máy tại Việt Nam (IP Việt Nam) hay máy chủ Vercel ở Mỹ (một số web lớn chặn)
+function scannerHtml() {
+  const sc = S.meta?.scanner;
+  if (!sc || sc.local) return '';
+  const w = sc.worker;
+  return w?.alive ? `<div class="small muted" style="margin-top:6px">${chip('Bộ quét: máy tại Việt Nam', 'ok')} ${esc(w.host || '')} — quét bằng IP Việt Nam</div>`
+    : `<div class="small muted" style="margin-top:6px">${chip('Bộ quét: máy chủ Vercel (Mỹ)', 'warn')} bộ quét Việt Nam đang tắt${w?.last_seen ? ` (lần cuối ${esc(w.last_seen)} UTC)` : ''} — vài web lớn chặn IP nước ngoài</div>`;
+}
 // Khối lượng web mẫu đã tự điền vào các ô số lượng (sale sửa được)
 function volumesHtml(V) {
   if (!V) return '';

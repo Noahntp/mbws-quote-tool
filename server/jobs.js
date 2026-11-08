@@ -33,15 +33,32 @@ export async function startJobLoop() {
   setInterval(() => { processNext().catch((e) => console.error('[hàng đợi]', e.message)); }, 1500).unref();
 }
 
-/** Serverless: chạy tiếp hàng đợi sau khi trả lời yêu cầu (trong giới hạn thời gian của hàm). */
+// Bộ quét riêng (server/scan-worker.js, chạy trên máy ở Việt Nam) báo "còn sống" mỗi 20 giây vào app_kv.
+const WORKER_FRESH_MS = 60000;
+export async function scanWorkerStatus() {
+  const r = await one("SELECT value, updated_at FROM app_kv WHERE key='scan_worker'");
+  if (!r) return null;
+  const at = Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z');
+  let v = {}; try { v = JSON.parse(r.value); } catch {}
+  return { host: v.host || null, started_at: v.started_at || null, busy: v.busy || null, last_seen: r.updated_at, alive: Number.isFinite(at) && Date.now() - at < WORKER_FRESH_MS };
+}
+
+/** Serverless: chạy tiếp hàng đợi sau khi trả lời yêu cầu (trong giới hạn thời gian của hàm).
+ *  Bộ quét Việt Nam đang chạy → nhường cho nó (quét bằng IP Việt Nam); bộ quét tắt → Vercel tự quét. */
 export function kickQueue() {
   if (!IS_SERVERLESS) return;
-  const p = processNext().catch((e) => console.error('[hàng đợi]', e.message));
+  const p = (async () => {
+    const w = await scanWorkerStatus().catch(() => null);
+    if (w?.alive) return;
+    await processNext();
+  })().catch((e) => console.error('[hàng đợi]', e.message));
   try { waitUntil(p); } catch { /* ngoài môi trường Vercel */ }
 }
 
 const utcMinus = (min) => new Date(Date.now() - min * 60000).toISOString().replace('T', ' ').slice(0, 19);
 
+let runningId = null;
+export const currentRunId = () => runningId;
 export async function processNext() {
   // Một lượt quét / tiến trình: Vercel có thể cho nhiều request dùng chung 1 máy chủ — 2 trình duyệt cùng lúc dễ hết bộ nhớ.
   // Bật chốt NGAY (trước mọi await) để 2 request gần nhau không cùng lọt qua.
@@ -56,6 +73,7 @@ export async function processNext() {
     if (!job || !claimed.changes) { busy = false; return false; } // không có việc / tiến trình khác đã nhận
     await run("UPDATE analysis_runs SET status='running', started_at=datetime('now'), attempts=attempts+1, locked_at=datetime('now') WHERE id=?", job.run_id);
   } catch (e) { busy = false; throw e; }
+  runningId = job.run_id;
   const t0 = Date.now();
   try {
     const r = await one('SELECT * FROM analysis_runs WHERE id=?', job.run_id);
@@ -73,7 +91,7 @@ export async function processNext() {
     await run('UPDATE job_queue SET status=?, locked_at=NULL WHERE run_id=?', retry ? 'queued' : 'failed', job.run_id);
     if (retry) await run('UPDATE analysis_runs SET status=?, error=?, locked_at=NULL, finished_at=NULL WHERE id=?', 'running', e.message, job.run_id);
     else await run("UPDATE analysis_runs SET status=?, error=?, locked_at=NULL, finished_at=datetime('now') WHERE id=?", 'failed', e.message, job.run_id);
-  } finally { busy = false; }
+  } finally { busy = false; runningId = null; }
   return true;
 }
 
@@ -287,5 +305,5 @@ export async function ingest(job, res) {
       JSON.stringify(res.robots || {}), JSON.stringify(tpl), res.crawler_version || null, res.fatal || null, job.id);
     await audit({ project_id: job.project_id, entity: 'analysis_run', entity_id: job.id, action: res.ok ? 'survey_done' : 'survey_failed', after: { pages: (res.pages || []).length, features: Object.keys(featureEv) } });
   });
-  if (IS_SERVERLESS) fs.rmSync(dir, { recursive: true, force: true }); // ảnh đã lưu vào CSDL
+  if (IS_SERVERLESS || process.env.SCAN_WORKER) fs.rmSync(dir, { recursive: true, force: true }); // ảnh đã lưu vào CSDL
 }
