@@ -85,7 +85,7 @@ async function executeRun(job) {
     const { runSurvey } = await import('./crawler/worker.js');
     let partial = null;
     const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), BUDGET_MS + 25000).unref?.());
-    const res = await Promise.race([runSurvey(cfg, { log: () => {}, onResult: (r) => { partial = r; } }), timeout]);
+    const res = await Promise.race([runSurvey(cfg, { log: (...a) => console.log(`[crawler #${job.id}]`, ...a), onResult: (r2) => { partial = r2; } }), timeout]);
     if (res !== 'timeout') return res;
     if (partial?.pages?.length) return { ...partial, ok: true, errors: [...(partial.errors || []), { error: 'Hết thời gian, dùng phần đã quét' }] };
     throw new Error('Quét quá thời gian cho phép');

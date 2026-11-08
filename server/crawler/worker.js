@@ -211,6 +211,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       } catch (e) { page.mobile_error = e.message.split('\n')[0]; } finally { await pm.close().catch(() => {}); }
     } catch (e) {
       page.error = e.message.split('\n')[0];
+      log('lỗi trang', url, staticMode ? '(HTML tĩnh)' : '(JS)', page.error.slice(0, 200));
       if (CRASH.test(page.error)) {
         page.error = 'Trình duyệt quét bị quá tải khi mở trang này (trang quá nặng cho máy chủ đám mây)';
         if (retry && timeLeft() > 40000) { // mở lại trình duyệt, thử lại một lần
