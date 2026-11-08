@@ -43,15 +43,19 @@ export function kickQueue() {
 const utcMinus = (min) => new Date(Date.now() - min * 60000).toISOString().replace('T', ' ').slice(0, 19);
 
 export async function processNext() {
+  // Một lượt quét / tiến trình: Vercel có thể cho nhiều request dùng chung 1 máy chủ — 2 trình duyệt cùng lúc dễ hết bộ nhớ.
+  // Bật chốt NGAY (trước mọi await) để 2 request gần nhau không cùng lọt qua.
   if (busy) return false;
-  // job "running" quá lâu (hàm bị dừng giữa chừng) → trả lại hàng đợi
-  await run("UPDATE job_queue SET status='queued', locked_at=NULL WHERE status='running' AND locked_at < ?", utcMinus(STALE_MINUTES));
-  const job = await one("SELECT run_id FROM job_queue WHERE status='queued' ORDER BY run_id LIMIT 1");
-  if (!job) return false;
-  const claimed = await run("UPDATE job_queue SET status='running', locked_at=datetime('now'), attempts=attempts+1 WHERE run_id=? AND status='queued'", job.run_id);
-  if (!claimed.changes) return false; // tiến trình khác đã nhận
-  await run("UPDATE analysis_runs SET status='running', started_at=datetime('now'), attempts=attempts+1, locked_at=datetime('now') WHERE id=?", job.run_id);
   busy = true;
+  let job;
+  try {
+    // job "running" quá lâu (hàm bị dừng giữa chừng) → trả lại hàng đợi
+    await run("UPDATE job_queue SET status='queued', locked_at=NULL WHERE status='running' AND locked_at < ?", utcMinus(STALE_MINUTES));
+    job = await one("SELECT run_id FROM job_queue WHERE status='queued' ORDER BY run_id LIMIT 1");
+    const claimed = job && await run("UPDATE job_queue SET status='running', locked_at=datetime('now'), attempts=attempts+1 WHERE run_id=? AND status='queued'", job.run_id);
+    if (!job || !claimed.changes) { busy = false; return false; } // không có việc / tiến trình khác đã nhận
+    await run("UPDATE analysis_runs SET status='running', started_at=datetime('now'), attempts=attempts+1, locked_at=datetime('now') WHERE id=?", job.run_id);
+  } catch (e) { busy = false; throw e; }
   const t0 = Date.now();
   try {
     const r = await one('SELECT * FROM analysis_runs WHERE id=?', job.run_id);

@@ -146,13 +146,19 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   };
   await openContexts();
   // Trình duyệt sập (trang quá nặng) → mở lại để quét tiếp
-  const ensureBrowser = async () => {
-    if (browser.isConnected()) return;
-    log('mở lại trình duyệt sau khi sập');
+  const ensureBrowser = async (force = false) => {
+    if (!force && browser.isConnected()) return;
+    log(force ? 'khởi động lại trình duyệt' : 'mở lại trình duyệt sau khi sập');
     await browser.close().catch(() => {});
     browser = await launchChromium();
     await openContexts();
   };
+  // Chromium serverless (một tiến trình) có thể tắt hẳn khi đóng hết tab → mở tab thất bại thì khởi động lại 1 lần
+  const newPage = async () => {
+    try { return await desktop.newPage(); } catch (e) { log('mở tab lỗi:', e.message.split('\n')[0].slice(0, 120)); await ensureBrowser(true); return desktop.newPage(); }
+  };
+  // Web cắt kết nối / không phản hồi máy quét (thường chặn IP máy chủ đám mây, nước ngoài) — quét tĩnh cũng không giúp
+  const NET_BLOCK = /ERR_CONNECTION_RESET|ERR_CONNECTION_REFUSED|ERR_CONNECTION_CLOSED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|ERR_ADDRESS_UNREACHABLE|ERR_SSL_PROTOCOL_ERROR|Timeout \d+ms exceeded/i;
   const CRASH = /Target page, context or browser has been closed|Target closed|browser has disconnected|has crashed|Page crashed/i;
 
   const visited = new Set();
@@ -163,8 +169,11 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     visited.add(vkey);
     log('visit', url);
     const page = { url, template, kind, captured_at: new Date().toISOString(), features: [] };
-    await ensureBrowser();
-    const p = await desktop.newPage();
+    let p;
+    try { await ensureBrowser(); p = await newPage(); } catch (e) {
+      page.error = e.message.split('\n')[0]; log('lỗi trình duyệt', url, page.error.slice(0, 160));
+      page.error = 'Trình duyệt quét không khởi động được trên máy chủ đám mây'; result.errors.push({ url, error: page.error }); result.pages.push(page); return page;
+    }
     try {
       const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
       page.status = resp?.status() ?? null;
@@ -210,7 +219,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
         page.mobile = { file: path.basename(mFile), hash: sha256(bufM), viewport: '390x844' };
       } catch (e) { page.mobile_error = e.message.split('\n')[0]; } finally { await pm.close().catch(() => {}); }
     } catch (e) {
-      page.error = e.message.split('\n')[0];
+      page.error = e.message.split('\n')[0]; page.error_raw = page.error;
       log('lỗi trang', url, staticMode ? '(HTML tĩnh)' : '(JS)', page.error.slice(0, 200));
       if (CRASH.test(page.error)) {
         page.error = 'Trình duyệt quét bị quá tải khi mở trang này (trang quá nặng cho máy chủ đám mây)';
@@ -232,15 +241,15 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     let home = await visit(start, 'home', 'home');
     // Trang chủ bị chặn (trang chống bot) hoặc quá nặng làm sập trình duyệt → quét lại bản HTML tĩnh (tắt JavaScript):
     // nhẹ, tránh được script chống bot; web dựng sẵn HTML (WordPress, sàn lớn có SSR…) vẫn đọc được tính năng.
-    if (home && (home.blocked || home.error) && timeLeft() > 40000) {
+    const netBlock = home?.error && NET_BLOCK.test(home.error_raw || home.error);
+    if (home && (home.blocked || home.error) && !netBlock && timeLeft() > 40000) {
       const why = home.blocked ? `bị chặn (${home.blocked})` : home.error;
       log('chuyển sang quét HTML tĩnh:', why);
       result.pages = result.pages.filter((x) => x !== home);
       result.errors = result.errors.filter((x) => x.url !== start);
       visited.delete(start.replace(/^(https?:\/\/)www\./, '$1'));
       staticMode = true;
-      await desktop?.close().catch(() => {}); await mobile?.close().catch(() => {});
-      if (browser.isConnected()) await openContexts(); else await ensureBrowser();
+      await ensureBrowser(true); // khởi động lại sạch (đóng tab trên Chromium một tiến trình có thể làm tắt trình duyệt)
       const st = await visit(start, 'home', 'home');
       const usable = st && !st.error && !st.blocked && ((st.metrics?.elements || 0) >= 300 || (st.links_count || 0) >= 20);
       log('HTML tĩnh:', st?.status, JSON.stringify(st?.title || ''), st?.final_url || '', 'phần tử', st?.metrics?.elements, 'link', st?.links_count, st?.blocked || st?.error || '', usable ? '→ dùng được' : '→ không dùng được');
@@ -250,6 +259,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     }
     // Vẫn không đọc được → dừng: kết quả rỗng sẽ cho giá sai
     if (home?.blocked) homeFail = `Web mẫu chặn máy quét (${home.blocked}). Thử "Quét lại" sau, quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
+    else if (netBlock) homeFail = `Web mẫu từ chối kết nối từ máy chủ quét (${(home.error_raw || home.error).match(NET_BLOCK)?.[0] || 'mất kết nối'}) — thường do web chặn IP máy chủ đám mây / nước ngoài. Quét bằng bản chạy trên máy (mạng Việt Nam), hoặc tick tính năng tay.`;
     else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}. Web mẫu quá nặng cho máy chủ đám mây — quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
     if (homeFail) return finish(false, homeFail);
     // mở rộng khám phá qua một số trang menu khác loại
