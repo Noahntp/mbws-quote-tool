@@ -128,7 +128,7 @@ export function coverage(catalog, packagesData, ctx, feature, qty) {
     const ad = addons.find((a) => a.code === (feature.capacity === 'products' ? 'ADD_PRODUCTS_20' : 'ADD_POSTS_200'));
     const per = feature.capacity === 'products' ? 20 : 200;
     const n = Math.ceil((qty - cap) / per);
-    return { status: 'paid_addon', addons: [{ code: ad.code, name: ad.name, qty: n, unit_price: ad.price, recurring: ad.recurring }], note: `Vượt ${qty - cap}, mua thêm ${n} × ${ad.unit}` };
+    return { status: 'paid_addon', capacity: cap, addons: [{ code: ad.code, name: ad.name, qty: n, unit_price: ad.price, recurring: ad.recurring }], note: `Vượt ${qty - cap}, mua thêm ${n} × ${ad.unit}` };
   }
   if (!feature.criteria) return { status: 'not_included', note: 'Không có trong bảng tiêu chí gói — tính ngoài gói' };
   for (const spec of feature.criteria) {

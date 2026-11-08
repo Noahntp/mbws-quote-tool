@@ -201,3 +201,21 @@ test('vượt ngân sách → đề xuất phương án vừa ngân sách, áp d
   assert.equal(after.project.pricing.package_code, null); // bỏ gói chọn tay
   assert.equal((await api(`/api/projects/${id}/quick`)).json.budget_plan, null); // đã vừa ngân sách
 });
+
+test('ngân sách: nhiều tính năng cùng cần gói cao → bỏ cả nhóm theo bậc gói, giảm số bài viết về sức chứa, vừa ngân sách', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { brief: 'web bán hàng' });
+  for (const f of ['SEARCH', 'FILTER', 'CONTACT_FORM', 'CHAT_ZALO', 'MAP', 'BLOG', 'CART', 'PRODUCT_CATALOG', 'BOOKING', 'LANDING', 'TRACKING'])
+    await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: f, include: true });
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'DATA_POSTS', include: true, quantity: 2000 });
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'DATA_PRODUCTS', include: true, quantity: 500 });
+  await api(`/api/projects/${id}`, 'PUT', { budget: 10000000 });
+  const q = (await api(`/api/projects/${id}/quick`)).json;
+  const plan = q.budget_plan.plans[0];
+  assert.equal(plan.fits, true, JSON.stringify(q.budget_plan.plans.map((p) => p.label)));
+  assert.ok(plan.removed.some((x) => ['BOOKING', 'LANDING', 'TRACKING'].includes(x.code)), 'phải bỏ nhóm tính năng cần HERO 3');
+  assert.ok(plan.reduced.some((x) => x.code === 'DATA_POSTS' && x.to < 2000), 'phải giảm số bài viết về sức chứa gói');
+  assert.equal((await api(`/api/projects/${id}/apply-plan`, 'POST', plan.apply)).status, 200);
+  const after = (await api(`/api/projects/${id}`)).json;
+  assert.ok(Number(after.preview.total_incl_vat) <= 10000000, `sau áp dụng ${after.preview.total_incl_vat}`);
+  assert.equal(after.requirements.find((r) => r.feature === 'DATA_POSTS').quantity, plan.apply.set_qty.DATA_POSTS);
+});

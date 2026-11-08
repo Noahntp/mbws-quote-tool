@@ -345,7 +345,8 @@ function budgetHtml(P, r) {
   const vat = (n) => Math.round(Number(n) * (1 + Number(r.vat_pct || 0) / 100));
   const plans = S.quick?.budget_plan?.plans || [];
   const card = (p, i) => `<div class="plan ${p.fits ? '' : 'nofit'}"><div><b>${p.fits ? `Phương án ${i + 1}` : 'Không vừa'}: ${esc(p.label)}</b> — <b>${money(vat(p.price))}</b> gồm VAT${p.package ? ` · gói ${esc(p.package)}` : ''}
-    ${p.removed?.length ? `<div class="small muted">Bỏ: ${p.removed.map((x) => `${esc(x.title)} (−${money(vat(x.saving))})`).join(', ')}</div>` : ''}
+    ${p.removed?.length ? `<div class="small muted">Bỏ: ${p.removed.map((x) => `${esc(x.title)}${x.saving ? ` (−${money(vat(x.saving))})` : ''}`).join(', ')}</div>` : ''}
+    ${p.reduced?.length ? `<div class="small muted">Giảm về sức chứa gói: ${p.reduced.map((x) => `${esc(x.title)} ${num(x.from, 0)} → ${num(x.to, 0)}`).join(', ')}</div>` : ''}
     ${p.fits ? '' : `<div class="small">Vẫn vượt ${money(vat(p.price) - b)} — cần trao đổi lại phạm vi hoặc ngân sách với khách.</div>`}</div>
     <button class="primary small" data-act="applyPlan" data-plan="${i}" ${can('requirement.decide') ? '' : 'disabled'}>Áp dụng</button></div>`;
   return `<div class="small" style="margin-top:8px">${chip('Vượt ngân sách ' + money(price - b), 'err')} Ngân sách khách ${vnd(b)} <span class="muted">(so với giá đã gồm VAT)</span>.</div>

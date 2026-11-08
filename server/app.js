@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { one, all, run, tx, audit, loadJson, activeSetting, ready, ROOT, DATA_DIR, IS_SERVERLESS, PERSISTENT, DRIVER } from './db.js';
 import { computeQuote, toJSONSafe } from './pricing.js';
-import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode, featureTiers, packagePrice } from './estimate.js';
+import { buildAutoLines, applyPackage, findPackage, recommendPackages, featureByCode, featureTiers, packagePrice, coverage, packageList } from './estimate.js';
 import { normalizeDomain, domainOf } from './crawler/urls.js';
 import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
@@ -618,62 +618,96 @@ async function designOptions(pid, b, current) {
   return { mode: dl.decision === 'include' ? 'match' : 'economy', level, match: { price: m.price, package: m.package, package_name: m.package_name }, economy: { price: e.price, package: e.package, package_name: e.package_name } };
 }
 
-// Đề xuất vừa ngân sách khách (giá trước VAT ≤ target). Thứ tự ưu tiên giữ cho khách:
-//  A. giữ đủ tính năng — hạ mức thiết kế (rồi tới "Tiết kiệm") tới khi vừa;
-//  B. giữ mức thiết kế hiện tại — bỏ bớt tính năng, mỗi bước bỏ mục giảm giá nhiều nhất;
-//  C. không cách nào vừa → phương án thấp nhất (tiết kiệm + bỏ tính năng) và số còn vượt.
+// Đề xuất vừa ngân sách khách (giá trước VAT ≤ target). Thứ tự ưu tiên giữ quyền lợi cho khách:
+//  A. giữ đủ tính năng — hạ mức thiết kế / "Tiết kiệm" / giảm giá trong hạn mức sale;
+//  B. theo bậc gói: với mỗi gói, bỏ CẢ NHÓM tính năng gói đó không có (bỏ lẻ từng mục thường không giảm giá vì
+//     nhiều mục cùng cần một gói), giảm số sản phẩm / bài viết về sức chứa gói, rồi thêm lại mục nào còn vừa;
+//     chọn phương án bỏ ít nhất;
+//  C. không cách nào vừa → phương án thấp nhất và số tiền còn vượt.
 const KEEP_FEATURES = new Set(['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE', 'DESIGN_LEVEL']);
+const CAP_QTY = ['DATA_PRODUCTS', 'DATA_POSTS']; // vượt sức chứa gói thì đề xuất giảm về đúng sức chứa
 async function planForBudget(pid, b, current, target) {
-  const cat = catalog();
+  const cat = catalog(); const pk = pkgDataWith(b.input.policy);
   const title = (code) => cat.features.find((f) => f.code === code)?.title || code;
+  const maxDisc = Number(b.input.policy?.sales_max_discount_pct ?? 0);
+  const discountFor = (price) => { if (price <= target) return 0; const d = Math.ceil((1 - target / price) * 100); return d <= maxDisc ? d : null; };
   const dl = current.find((r) => r.feature === 'DESIGN_LEVEL');
   const curLevel = dl?.decision === 'include' ? Number(dl.quantity || 1) : 0;
   const withDesign = (reqs, lv) => reqs.map((r) => (r.feature === 'DESIGN_LEVEL' ? { ...r, decision: lv ? 'include' : 'exclude', quantity: lv || r.quantity } : r));
-  const sim = async (reqs) => (await simulatePrice(pid, b, reqs, { autoPackage: true }));
+  const sim = async (reqs) => simulatePrice(pid, b, reqs, { autoPackage: true });
+  const designLabel = (lv) => (!dl ? '' : lv ? `giao diện M${lv}` : 'giao diện mẫu dựng sẵn'); // hồ sơ không có phần làm giống web mẫu thì không ghi
   const plans = [];
-  const maxDisc = Number(b.input.policy?.sales_max_discount_pct ?? 0);
-  // giá vượt mục tiêu ít (≤ hạn mức giảm giá của sale) → giảm giá thay vì cắt tính năng
-  const discountFor = (price) => { if (price <= target) return 0; const d = Math.ceil((1 - target / price) * 100); return d <= maxDisc ? d : null; };
-  // A: giữ đủ tính năng — hạ mức thiết kế (cả mức hiện tại nếu chỉ cần giảm giá)
+
+  // A: giữ đủ tính năng
   if (dl) {
     for (let lv = curLevel; lv >= 0; lv--) {
       const s = await sim(withDesign(current, lv));
       const d = discountFor(s.price);
-      if (d === null || (lv === curLevel && d === 0)) continue; // mức hiện tại không giảm giá mà vừa thì đã không vượt ngân sách
-      const name = lv ? `Giữ đủ tính năng, giao diện mức M${lv}` : 'Giữ đủ tính năng, giao diện mẫu dựng sẵn (Tiết kiệm)';
-      plans.push({ kind: 'design', label: name + (d ? ` + giảm ${d}%` : ''), price: Math.round(s.price * (1 - d / 100)), package: s.package, apply: { level: lv, exclude: [], discount_pct: d }, removed: [] });
+      if (d === null || (lv === curLevel && d === 0)) continue;
+      plans.push({ kind: 'design', label: `Giữ đủ tính năng, ${designLabel(lv)}${lv ? '' : ' (Tiết kiệm)'}${d ? ` + giảm ${d}%` : ''}`, price: Math.round(s.price * (1 - d / 100)), package: s.package, removed: [], reduced: [], fits: true, apply: { level: lv, exclude: [], set_qty: {}, discount_pct: d } });
       break;
     }
+  } else {
+    const s = await sim(current); const d = discountFor(s.price);
+    if (d) plans.push({ kind: 'discount', label: `Giữ nguyên phạm vi + giảm ${d}%`, price: Math.round(s.price * (1 - d / 100)), package: s.package, removed: [], reduced: [], fits: true, apply: { level: 0, exclude: [], set_qty: {}, discount_pct: d } });
   }
-  // B/C: bỏ bớt tính năng (tham lam: mỗi bước bỏ mục giảm nhiều nhất)
-  const greedy = async (startLevel) => {
-    let reqs = withDesign(current, startLevel); let s = await sim(reqs); const removed = [];
-    for (let step = 0; step < 8 && s.price > target; step++) {
-      let best = null; let fit = null;
-      for (const r of reqs.filter((x) => x.decision === 'include' && x.feature && !KEEP_FEATURES.has(x.feature))) {
-        const alt = reqs.map((x) => (x === r ? { ...x, decision: 'exclude' } : x));
-        const t = await sim(alt);
-        if (t.price >= s.price) continue;
-        if (t.price <= target && (!fit || t.price > fit.s.price)) fit = { r, s: t, alt }; // vừa ngân sách mà giữ được nhiều nhất
-        if (!best || t.price < best.s.price) best = { r, s: t, alt };
+  if (plans.length) return { target, plans }; // giữ được đủ tính năng thì không cần bỏ gì
+
+  // B: theo bậc gói
+  const removable = current.filter((r) => r.decision === 'include' && r.feature && !KEEP_FEATURES.has(r.feature));
+  const cands = []; const seen = new Set(); let cheapest = null;
+  for (const lv of curLevel ? [curLevel, 0] : [0]) {
+    for (const ctx of packageList(pk)) {
+      const cov = (r) => { const f = featureByCode(cat, r.feature); return f ? coverage(cat, pk, ctx, f, Number(r.quantity ?? f.default_qty ?? 1)) : null; };
+      const removed = removable.filter((r) => cov(r)?.status === 'not_included').map((r) => r.feature);
+      const reduced = [];
+      for (const code of CAP_QTY) {
+        const r = current.find((x) => x.feature === code && x.decision === 'include');
+        const c = r && cov(r);
+        if (c?.status === 'paid_addon' && Number.isFinite(c.capacity) && c.capacity < Number(r.quantity)) reduced.push({ code, title: title(code), from: Number(r.quantity), to: c.capacity });
       }
-      if (fit) best = fit;
-      if (!best) break;
-      removed.push({ code: best.r.feature, title: title(best.r.feature), saving: s.price - best.s.price });
-      reqs = best.alt; s = best.s;
+      const key = `${lv}|${removed.slice().sort().join(',')}|${reduced.map((x) => x.code + x.to).join(',')}`;
+      if (seen.has(key)) continue; seen.add(key);
+      const build = (rem, red) => withDesign(current, lv).map((r) => (rem.includes(r.feature) ? { ...r, decision: 'exclude' } : red.find((x) => x.code === r.feature) ? { ...r, quantity: red.find((x) => x.code === r.feature).to } : r));
+      let rem = [...removed]; const red = [...reduced];
+      let s = await sim(build(rem, red));
+      if (!cheapest || s.price < cheapest.price) cheapest = { lv, removed: [...rem], reduced: [...red], price: s.price, package: s.package };
+      if (s.package !== ctx.pkg.code) continue; // sức chứa đã giảm theo gói này nhưng hệ thống chọn gói khác → phương án của gói kia sẽ được xét riêng
+      let d = discountFor(s.price);
+      if (d === null) continue;
+      // thêm lại mục đã bỏ nếu vẫn vừa (giá ngoài gói / nâng gói vẫn trong ngân sách)
+      for (const code of [...rem]) {
+        const t = await sim(build(rem.filter((x) => x !== code), red));
+        const d2 = discountFor(t.price);
+        if (d2 !== null) { rem = rem.filter((x) => x !== code); s = t; d = d2; }
+      }
+      // mức mất mát cho khách: mỗi tính năng bỏ = 1; giảm số lượng tính theo phần bị cắt (cắt hết ≈ 1,5 tính năng); hạ mức thiết kế = 0,5
+      const loss = rem.length + red.reduce((n, x) => n + 1.5 * (1 - x.to / x.from), 0) + (lv < curLevel ? 0.5 : 0);
+      cands.push({ lv, removed: rem, reduced: red, price: s.price, d, package: s.package, loss });
     }
-    return { price: s.price, package: s.package, removed };
+  }
+  const describe = async (c, fits) => {
+    // tiết kiệm của từng mục bỏ (so với thêm riêng mục đó lại)
+    const base = withDesign(current, c.lv).map((r) => (c.removed.includes(r.feature) ? { ...r, decision: 'exclude' } : c.reduced.find((x) => x.code === r.feature) ? { ...r, quantity: c.reduced.find((x) => x.code === r.feature).to } : r));
+    const removed = [];
+    for (const code of c.removed) { const t = await sim(base.map((r) => (r.feature === code ? { ...r, decision: 'include' } : r))); removed.push({ code, title: title(code), saving: Math.max(0, t.price - c.price) }); }
+    const parts = [];
+    if (c.removed.length) parts.push(`bỏ ${c.removed.length} tính năng`);
+    if (c.reduced.length) parts.push(c.reduced.map((x) => `${x.title.toLowerCase()} ${x.from.toLocaleString('vi-VN')} → ${x.to.toLocaleString('vi-VN')}`).join(', '));
+    const label = `${fits ? '' : 'Thấp nhất có thể: '}Gói ${c.package}${[designLabel(c.lv), parts.join('; ')].filter(Boolean).map((x) => ', ' + x).join('')}${c.d ? ` + giảm ${c.d}%` : ''}`;
+    return { kind: 'package', label, price: Math.round(c.price * (1 - (c.d || 0) / 100)), package: c.package, removed, reduced: c.reduced, fits,
+      apply: { level: c.lv, exclude: c.removed, set_qty: Object.fromEntries(c.reduced.map((x) => [x.code, x.to])), discount_pct: c.d || 0 } };
   };
-  if (curLevel) {
-    const g = await greedy(curLevel);
-    if (g.price <= target && g.removed.length) plans.push({ kind: 'features', label: `Giữ giao diện M${curLevel}, bỏ ${g.removed.length} tính năng`, ...g, apply: { level: curLevel, exclude: g.removed.map((x) => x.code) } });
+  // mất mát ít nhất (tính năng + số lượng + mức thiết kế) → giá gần ngân sách nhất (giữ nhiều giá trị nhất)
+  cands.sort((a, b2) => a.loss - b2.loss || b2.price - a.price);
+  const best = cands[0];
+  if (best) {
+    plans.push(await describe(best, true));
+    const alt = cands.find((c) => c !== best && c.package !== best.package && c.loss <= best.loss + 1.5);
+    if (alt) plans.push(await describe(alt, true));
+    return { target, plans };
   }
-  if (!plans.length) {
-    const g = await greedy(0);
-    const fits = g.price <= target;
-    plans.push({ kind: fits ? 'features' : 'minimum', label: fits ? `Giao diện mẫu dựng sẵn, bỏ ${g.removed.length} tính năng` : 'Thấp nhất có thể (giao diện dựng sẵn, bỏ bớt tính năng)', ...g, fits, apply: { level: 0, exclude: g.removed.map((x) => x.code) } });
-  }
-  for (const p of plans) if (p.fits === undefined) p.fits = true;
+  if (cheapest) plans.push(await describe(cheapest, false));
   return { target, plans };
 }
 
@@ -689,6 +723,11 @@ app.post('/api/projects/:id/apply-plan', h(async (req, res) => {
     const pricing = JSON.parse(p.pricing_json || '{}');
     const dl = await one("SELECT * FROM requirements WHERE project_id=? AND feature='DESIGN_LEVEL'", pid);
     if (dl) await run("UPDATE requirements SET decision=?, quantity=?, updated_at=datetime('now') WHERE id=?", level ? 'include' : 'exclude', level || dl.quantity, dl.id);
+    const setQty = req.body.set_qty && typeof req.body.set_qty === 'object' ? req.body.set_qty : {};
+    for (const [f, q] of Object.entries(setQty)) {
+      if (!CAP_QTY.includes(f) || !(Number(q) >= 0)) continue;
+      await run("UPDATE requirements SET quantity=?, source_kind='client', updated_at=datetime('now') WHERE project_id=? AND feature=?", Number(q), pid, f);
+    }
     for (const f of exclude) {
       const r = await one("SELECT id FROM requirements WHERE project_id=? AND feature=? AND decision='include'", pid, f);
       if (r) { await run("UPDATE requirements SET decision='exclude', updated_at=datetime('now') WHERE id=?", r.id); await run("UPDATE questions SET status='dropped' WHERE requirement_id=? AND status='open'", r.id); }
@@ -697,7 +736,7 @@ app.post('/api/projects/:id/apply-plan', h(async (req, res) => {
     const disc = Number(req.body.discount_pct || 0);
     if (disc > 0) pricing.discount_pct = disc;
     await run("UPDATE projects SET pricing_json=?, rev=rev+1, updated_at=datetime('now') WHERE id=?", JSON.stringify(pricing), pid);
-    await audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'apply_budget_plan', after: { level, exclude, discount_pct: disc || null } });
+    await audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'apply_budget_plan', after: { level, exclude, set_qty: req.body.set_qty || null, discount_pct: disc || null } });
     await syncAutoLines(pid);
   });
   res.json({ ok: true });
