@@ -89,6 +89,10 @@ docker logs -f mbws-scan
 
 ## 3. Cài trên máy tính Windows trong văn phòng
 
+**Cách nhanh** (máy đã có Node.js, Git, Vercel CLI và đã đăng nhập Vercel): bấm đúp file **`chay-bo-quet.bat`** trong thư mục dự án. File này tự làm ba việc: cài thư viện (lần đầu), lấy file `.env.worker` từ Vercel, rồi chạy bộ quét và tự chạy lại nếu bị dừng.
+
+**Cách cài tay:**
+
 1. Cài **Node.js 22 LTS** (https://nodejs.org) và **Git** (https://git-scm.com).
 2. Mở PowerShell, chạy:
    ```powershell
