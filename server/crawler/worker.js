@@ -242,7 +242,8 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     // Trang chủ bị chặn (trang chống bot) hoặc quá nặng làm sập trình duyệt → quét lại bản HTML tĩnh (tắt JavaScript):
     // nhẹ, tránh được script chống bot; web dựng sẵn HTML (WordPress, sàn lớn có SSR…) vẫn đọc được tính năng.
     const netBlock = home?.error && NET_BLOCK.test(home.error_raw || home.error);
-    if (home && (home.blocked || home.error) && !netBlock && timeLeft() > 40000) {
+    const denied = home?.error && /^HTTP (401|403|429|451)\b/.test(home.error_raw || home.error); // web từ chối truy cập: quét tĩnh hay quét từ máy khác cũng vậy
+    if (home && (home.blocked || home.error) && !netBlock && !denied && timeLeft() > 40000) {
       const why = home.blocked ? `bị chặn (${home.blocked})` : home.error;
       log('chuyển sang quét HTML tĩnh:', why);
       result.pages = result.pages.filter((x) => x !== home);
@@ -259,6 +260,8 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     }
     // Vẫn không đọc được → dừng: kết quả rỗng sẽ cho giá sai
     if (home?.blocked) homeFail = `Web mẫu chặn máy quét (${home.blocked}). Thử "Quét lại" sau, quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
+    else if (denied && /429/.test(home.error)) homeFail = 'Web mẫu đang giới hạn số lượt truy cập (HTTP 429). Thử "Quét lại" sau vài phút, hoặc tick tính năng tay.';
+    else if (denied) homeFail = `Web mẫu từ chối máy quét (${home.error}: tường lửa của web chặn công cụ tự động — quét từ máy khác cũng bị). Tick tính năng tay ở mục 2, hoặc nhờ quản trị web cho phép "MBWS-QuoteBot".`;
     else if (netBlock) homeFail = `Web mẫu từ chối kết nối từ máy chủ quét (${(home.error_raw || home.error).match(NET_BLOCK)?.[0] || 'mất kết nối'}) — thường do web chặn IP máy chủ đám mây / nước ngoài. Quét bằng bản chạy trên máy (mạng Việt Nam), hoặc tick tính năng tay.`;
     else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}. Web mẫu quá nặng cho máy chủ đám mây — quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
     if (homeFail) return finish(false, homeFail);
