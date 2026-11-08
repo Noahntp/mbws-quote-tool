@@ -631,23 +631,33 @@ async function planForBudget(pid, b, current, target) {
   const withDesign = (reqs, lv) => reqs.map((r) => (r.feature === 'DESIGN_LEVEL' ? { ...r, decision: lv ? 'include' : 'exclude', quantity: lv || r.quantity } : r));
   const sim = async (reqs) => (await simulatePrice(pid, b, reqs, { autoPackage: true }));
   const plans = [];
-  // A: hạ mức thiết kế
+  const maxDisc = Number(b.input.policy?.sales_max_discount_pct ?? 0);
+  // giá vượt mục tiêu ít (≤ hạn mức giảm giá của sale) → giảm giá thay vì cắt tính năng
+  const discountFor = (price) => { if (price <= target) return 0; const d = Math.ceil((1 - target / price) * 100); return d <= maxDisc ? d : null; };
+  // A: giữ đủ tính năng — hạ mức thiết kế (cả mức hiện tại nếu chỉ cần giảm giá)
   if (dl) {
-    for (let lv = curLevel - 1; lv >= 0; lv--) {
+    for (let lv = curLevel; lv >= 0; lv--) {
       const s = await sim(withDesign(current, lv));
-      if (s.price <= target) { plans.push({ kind: 'design', label: lv ? `Giữ đủ tính năng, giao diện mức M${lv}` : 'Giữ đủ tính năng, giao diện mẫu dựng sẵn (Tiết kiệm)', price: s.price, package: s.package, apply: { level: lv, exclude: [] }, removed: [] }); break; }
+      const d = discountFor(s.price);
+      if (d === null || (lv === curLevel && d === 0)) continue; // mức hiện tại không giảm giá mà vừa thì đã không vượt ngân sách
+      const name = lv ? `Giữ đủ tính năng, giao diện mức M${lv}` : 'Giữ đủ tính năng, giao diện mẫu dựng sẵn (Tiết kiệm)';
+      plans.push({ kind: 'design', label: name + (d ? ` + giảm ${d}%` : ''), price: Math.round(s.price * (1 - d / 100)), package: s.package, apply: { level: lv, exclude: [], discount_pct: d }, removed: [] });
+      break;
     }
   }
   // B/C: bỏ bớt tính năng (tham lam: mỗi bước bỏ mục giảm nhiều nhất)
   const greedy = async (startLevel) => {
     let reqs = withDesign(current, startLevel); let s = await sim(reqs); const removed = [];
     for (let step = 0; step < 8 && s.price > target; step++) {
-      let best = null;
+      let best = null; let fit = null;
       for (const r of reqs.filter((x) => x.decision === 'include' && x.feature && !KEEP_FEATURES.has(x.feature))) {
         const alt = reqs.map((x) => (x === r ? { ...x, decision: 'exclude' } : x));
         const t = await sim(alt);
-        if (t.price < s.price && (!best || t.price < best.s.price)) best = { r, s: t, alt };
+        if (t.price >= s.price) continue;
+        if (t.price <= target && (!fit || t.price > fit.s.price)) fit = { r, s: t, alt }; // vừa ngân sách mà giữ được nhiều nhất
+        if (!best || t.price < best.s.price) best = { r, s: t, alt };
       }
+      if (fit) best = fit;
       if (!best) break;
       removed.push({ code: best.r.feature, title: title(best.r.feature), saving: s.price - best.s.price });
       reqs = best.alt; s = best.s;
@@ -684,8 +694,10 @@ app.post('/api/projects/:id/apply-plan', h(async (req, res) => {
       if (r) { await run("UPDATE requirements SET decision='exclude', updated_at=datetime('now') WHERE id=?", r.id); await run("UPDATE questions SET status='dropped' WHERE requirement_id=? AND status='open'", r.id); }
     }
     pricing.package_code = null; pricing.package_price = null;
+    const disc = Number(req.body.discount_pct || 0);
+    if (disc > 0) pricing.discount_pct = disc;
     await run("UPDATE projects SET pricing_json=?, rev=rev+1, updated_at=datetime('now') WHERE id=?", JSON.stringify(pricing), pid);
-    await audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'apply_budget_plan', after: { level, exclude } });
+    await audit({ project_id: pid, entity: 'project', entity_id: pid, user_id: req.user.id, action: 'apply_budget_plan', after: { level, exclude, discount_pct: disc || null } });
     await syncAutoLines(pid);
   });
   res.json({ ok: true });
