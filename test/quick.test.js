@@ -183,6 +183,10 @@ test('vượt ngân sách → đề xuất phương án vừa ngân sách, áp d
       { feature: 'MULTILANG', detail: 'VI | EN', verification: 'observed' }, { feature: 'BOOKING', detail: 'Đặt lịch', verification: 'observed' },
       { feature: 'LOYALTY', detail: 'Tích điểm', verification: 'observed' }, { feature: 'SEARCH', detail: 'Tìm kiếm', verification: 'observed' }] }],
   });
+  // danh sách gói: dòng HERO cho "giống web mẫu" + nhóm ZERO cho phương án tiết kiệm
+  const rec = (await api(`/api/projects/${id}/recommend`)).json;
+  assert.ok(rec.ranked.every((x) => x.line === 'WEB_HERO'));
+  assert.ok(rec.economy.length > 0 && rec.economy.every((x) => x.line === 'WEB_ZERO'));
   // sale chọn tay gói đắt hơn → hiện riêng "gói chọn tay", không tính là phát sinh tính năng
   await api(`/api/projects/${id}`, 'PUT', { pricing: { package_code: 'HERO 8', package_price: null } });
   let q = (await api(`/api/projects/${id}/quick`)).json;

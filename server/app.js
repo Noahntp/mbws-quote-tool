@@ -703,8 +703,12 @@ async function planForBudget(pid, b, current, target) {
   const best = cands[0];
   if (best) {
     plans.push(await describe(best, true));
+    const isZero = (c) => /^ZERO/.test(c.package || '');
     const alt = cands.find((c) => c !== best && c.package !== best.package && c.loss <= best.loss + 1.5);
     if (alt) plans.push(await describe(alt, true));
+    // luôn có một phương án gói ZERO (rẻ nhất, giao diện dựng sẵn) nếu vừa ngân sách
+    const zero = !isZero(best) && !(alt && isZero(alt)) ? cands.find((c) => isZero(c)) : null;
+    if (zero) plans.push(await describe(zero, true));
     return { target, plans };
   }
   if (cheapest) plans.push(await describe(cheapest, false));
@@ -849,7 +853,17 @@ app.get('/api/projects/:id/recommend', h(async (req, res) => {
   const reqs = b.reqs;
   let lines = (await all('SELECT * FROM estimate_lines WHERE project_id=?', pid)).map((l) => ({ ...l, group: l.grp, include: !!l.include }));
   if (!lines.length) lines = buildAutoLines(catalog(), reqs); // chưa sinh dự toán thì dùng định mức chuẩn để so sánh
-  res.json(recommendPackages(catalog(), pkgDataWith(b.input.policy), { requirements: reqs, lines, rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks, priceHint: complexityHint(b.pricing, reqs) }));
+  const pk = pkgDataWith(b.input.policy);
+  const common = { lines, rates: b.input.rates, policy: b.input.policy, external: b.input.external, risks: b.input.risks };
+  const rec = recommendPackages(catalog(), pk, { requirements: reqs, ...common, priceHint: complexityHint(b.pricing, reqs) });
+  // Có phần "giống web mẫu" (chỉ dòng HERO) → kèm các gói ZERO cho phương án Tiết kiệm (giao diện dựng sẵn) để sale đưa khách so sánh
+  const dl = reqs.find((r) => r.feature === 'DESIGN_LEVEL' && r.decision === 'include');
+  if (dl) {
+    const eco = reqs.map((r) => (r === dl ? { ...r, decision: 'exclude' } : r));
+    const ecoLines = buildAutoLines(catalog(), eco);
+    rec.economy = recommendPackages(catalog(), pk, { requirements: eco, ...common, lines: ecoLines, priceHint: null }).ranked.filter((x) => x.line === 'WEB_ZERO');
+  }
+  res.json(rec);
 }));
 
 // ---------- Phiên bản, duyệt, xuất ----------

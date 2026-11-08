@@ -319,7 +319,11 @@ function renderQuick() {
       <div class="row" style="margin-top:8px"><label class="f" style="min-width:0">Giảm giá %<input class="num" type="number" step="0.5" min="0" data-pr="discount_pct" value="${esc(p.pricing.discount_pct || 0)}"></label>
         <button class="primary" data-act="printQuick" ${fatal.length ? 'disabled' : ''} style="flex:1;padding:10px">🖨 In báo giá</button></div>
       ${fatal.length ? `<ul class="checks small">${fatal.map((c) => `<li class="error">⛔ ${esc(c.message)}</li>`).join('')}</ul>` : ''}
-      ${S.rec?.ranked?.length ? `<h3>Gói khác</h3><table class="small"><tbody>${S.rec.ranked.slice(0, 6).map((x) => `<tr ${x.code === pkgCode ? 'style="font-weight:700"' : ''}><td>${esc(x.code)} <span class="muted">${esc(x.name)}</span></td><td class="n">${trieu(x.price_list)}</td><td>${x.code === pkgCode ? '✓' : `<button class="link" data-act="pickPkg" data-code="${esc(x.code)}">Chọn</button>`}</td></tr>`).join('')}</tbody></table>
+      ${S.rec?.ranked?.length ? `<h3>Gói khác</h3><table class="small"><tbody>
+        ${S.rec.economy?.length ? `<tr><td colspan="3" class="muted">Giống web mẫu (dòng HERO, thiết kế riêng)</td></tr>` : ''}
+        ${S.rec.ranked.slice(0, S.rec.economy?.length ? 4 : 6).map((x) => `<tr ${x.code === pkgCode ? 'style="font-weight:700"' : ''}><td>${esc(x.code)} <span class="muted">${esc(x.name)}</span></td><td class="n">${trieu(x.price_list)}</td><td>${x.code === pkgCode ? '✓' : `<button class="link" data-act="pickPkg" data-code="${esc(x.code)}">Chọn</button>`}</td></tr>`).join('')}
+        ${S.rec.economy?.length ? `<tr><td colspan="3" class="muted" style="padding-top:8px">Tiết kiệm (dòng ZERO, giao diện mẫu dựng sẵn)</td></tr>` + S.rec.economy.slice(0, 4).map((x) => `<tr ${x.code === pkgCode ? 'style="font-weight:700"' : ''}><td>${esc(x.code)} <span class="muted">${esc(x.name)}</span></td><td class="n">${trieu(x.price_list)}</td><td>${x.code === pkgCode ? '✓' : `<button class="link" data-act="pickPkg" data-code="${esc(x.code)}" data-eco="1">Chọn</button>`}</td></tr>`).join('') : ''}
+      </tbody></table>
         ${p.pricing.package_code ? `<button class="link small" data-act="autoPkg">↺ Tự chọn gói rẻ nhất</button>` : ''}` : ''}
       ${questions.length ? `<h3>Nên hỏi khách</h3><ul class="small" style="margin:0 0 0 16px;padding:0">${questions.slice(0, 6).map((q) => `<li>${esc(q.text)}</li>`).join('')}</ul>` : ''}`}
     </div>
@@ -895,7 +899,10 @@ const ACT = {
   addExt: run(async () => { await api(`/api/projects/${pid()}/external`, 'POST', { title: 'Chi phí mới', amount: 0 }); reload(); }),
   delExt: run(async (el) => { await api(`/api/external/${el.dataset.id}`, 'DELETE'); reload(); }),
   recommend: run(async () => { S.rec = await api(`/api/projects/${pid()}/recommend`); renderProject(); }),
-  pickPkg: run(async (el) => { await savePricing({ mode: 'package', package_code: el.dataset.code, package_price: null }); }),
+  pickPkg: run(async (el) => {
+    if (el.dataset.eco) await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: false });
+    await savePricing({ mode: 'package', package_code: el.dataset.code, package_price: null });
+  }),
   addCare: run(async () => {
     const c = S.meta.packages.lines.find((l) => l.id === 'WEB_CARE').packages.find((x) => x.code === val('careSel')); if (!c) return;
     await savePricing({ recurring: [...(S.project.project.pricing.recurring || []), { title: `${c.code} ${c.name} (Web Care)`, amount: c.price.min, period: 'tháng' }] });
