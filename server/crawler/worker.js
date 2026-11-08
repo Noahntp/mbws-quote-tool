@@ -20,7 +20,9 @@ const USER_AGENT_SUFFIX = ` ${UA_TOKEN}/0.1 (+khao sat bao gia noi bo)`;
 
 // ---------- Nhận diện trang chặn bot (CAPTCHA / tường lửa chống bot) ----------
 // Web lớn (alibaba, shopee...) thường trả trang này cho IP máy chủ đám mây. Không vượt qua — chỉ báo rõ.
-const WALL_URL = /_____tmd_____|\/punish\b|captcha|\/cdn-cgi\/challenge|__cf_chl|validate\.perfdrive|\/sorry\/index/i;
+const WALL_URL = /_____tmd_____|\/punish\b|captcha|\/cdn-cgi\/challenge|__cf_chl|validate\.perfdrive|\/sorry\/index|\/verify\/(traffic|captcha|human)|\/(anti-?bot|bot-?check)\b/i;
+// Script nặng của bên thứ ba (quảng cáo, đo lường, chat, video nhúng): chặn khi quét chế độ nhẹ — bộ nhận diện chỉ đọc thẻ HTML nên không ảnh hưởng
+const HEAVY_3P = /(^|\.)(googletagmanager\.com|google-analytics\.com|doubleclick\.net|googlesyndication\.com|googleadservices\.com|facebook\.net|hotjar\.com|clarity\.ms|analytics\.tiktok\.com|criteo\.(com|net)|adnxs\.com|taboola\.com|outbrain\.com|subiz\.(com|xyz)|tawk\.to|crisp\.chat|intercom(cdn)?\.io|zopim\.com|onesignal\.com|youtube\.com|ytimg\.com|vimeo\.com)$/i;
 const WALL_TITLE = /captcha|just a moment|attention required|access denied|are you a robot|security check|interception|verif(y|ying) you are human|robot check|request blocked|bị chặn|xác minh/i;
 const WALL_TEXT = /captcha|verify you are human|are you a robot|unusual traffic|slide to verify|press (&|and) hold|access denied|request (was )?blocked|checking your browser|enable javascript and cookies to continue|xác minh bạn không phải|lưu lượng truy cập bất thường/i;
 // Dấu hiệu DOM đặc trưng của trang chặn (không tính reCAPTCHA trong form liên hệ thông thường)
@@ -128,15 +130,16 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     if (req.isNavigationRequest() && req.frame().parentFrame() === null && !sameSite(req.url(), rootHost)) { result.blocked_requests++; return route.abort('blockedbyclient'); }
     try { await assertPublicHost(u.hostname); } catch { result.blocked_requests++; return route.abort('blockedbyclient'); }
     if (req.resourceType() === 'media' || (LIGHT && (req.resourceType() === 'image' || req.resourceType() === 'font'))) return route.abort();
+    if (LIGHT && HEAVY_3P.test(u.hostname) && !sameSite(req.url(), rootHost)) return route.abort();
     return route.continue();
   };
   const mkContext = async (opts) => {
     const ua = (opts.userAgent || `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browser.version()} Safari/537.36`);
-    const ctx = await browser.newContext({ ...opts, userAgent: ua + USER_AGENT_SUFFIX, acceptDownloads: false, serviceWorkers: 'block', locale: 'vi-VN' });
+    const ctx = await browser.newContext({ ...opts, javaScriptEnabled: !staticMode, userAgent: ua + USER_AGENT_SUFFIX, acceptDownloads: false, serviceWorkers: 'block', locale: 'vi-VN' });
     await ctx.route('**/*', guard);
     return ctx;
   };
-  let desktop; let mobile;
+  let desktop; let mobile; let staticMode = false; // staticMode: chỉ đọc HTML máy chủ trả về (không chạy JavaScript)
   const openContexts = async () => {
     desktop = await mkContext({ viewport: { width: 1366, height: 900 } });
     mobile = LIGHT ? null : await mkContext({ ...(await devicesPreset('iPhone 13')) });
@@ -188,6 +191,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       page.layout = await p.evaluate(layoutSignatureInPage).catch(() => null);
       if (!page.blocked) page.features = d.features;
       if (d.generator && !result.generator) result.generator = d.generator;
+      page.links_count = d.links.length;
       d.links.forEach((h) => addUrl(h, finalUrl));
       // ảnh desktop (toàn trang, giới hạn chiều cao) + mobile
       const n = String(++shot).padStart(3, '0');
@@ -224,10 +228,26 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
 
   let homeFail = null;
   try {
-    const home = await visit(start, 'home', 'home');
-    // Trang chủ bị chặn / không mở được → dừng: kết quả rỗng sẽ cho giá sai (thường gặp khi quét từ máy chủ đám mây)
-    if (home?.blocked) homeFail = `Web mẫu chặn máy quét (${home.blocked}). Thử "Quét lại" sau, quét từ máy chạy local, hoặc tick tính năng tay.`;
-    else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}`;
+    let home = await visit(start, 'home', 'home');
+    // Trang chủ bị chặn (trang chống bot) hoặc quá nặng làm sập trình duyệt → quét lại bản HTML tĩnh (tắt JavaScript):
+    // nhẹ, tránh được script chống bot; web dựng sẵn HTML (WordPress, sàn lớn có SSR…) vẫn đọc được tính năng.
+    if (home && (home.blocked || home.error) && timeLeft() > 40000) {
+      const why = home.blocked ? `bị chặn (${home.blocked})` : home.error;
+      log('chuyển sang quét HTML tĩnh:', why);
+      result.pages = result.pages.filter((x) => x !== home);
+      result.errors = result.errors.filter((x) => x.url !== start);
+      visited.delete(start.replace(/^(https?:\/\/)www\./, '$1'));
+      staticMode = true;
+      await desktop?.close().catch(() => {}); await mobile?.close().catch(() => {});
+      if (browser.isConnected()) await openContexts(); else await ensureBrowser();
+      const st = await visit(start, 'home', 'home');
+      const usable = st && !st.error && !st.blocked && ((st.metrics?.elements || 0) >= 300 || (st.links_count || 0) >= 20);
+      if (usable) { home = st; result.static_mode = { reason: why }; }
+      else home = { ...home, blocked: home.blocked, error: home.error };
+    }
+    // Vẫn không đọc được → dừng: kết quả rỗng sẽ cho giá sai
+    if (home?.blocked) homeFail = `Web mẫu chặn máy quét (${home.blocked}). Thử "Quét lại" sau, quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
+    else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}. Web mẫu quá nặng cho máy chủ đám mây — quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
     if (homeFail) return finish(false, homeFail);
     // mở rộng khám phá qua một số trang menu khác loại
     const firstGroups = groupTemplates([...discovered.values()]).filter((g) => g.template !== 'home');

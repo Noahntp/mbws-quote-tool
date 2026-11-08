@@ -203,6 +203,7 @@ export async function ingest(job, res) {
     const mainLoc = locales.length >= 2 ? locales.sort((a, b) => locCount[b] - locCount[a])[0] : null;
     const perLang = (urls) => (mainLoc ? urls.filter((u) => locOf(u) === mainLoc) : urls).length;
     const urlsOf = (t) => (res.discovered || []).filter((u) => classify(u).template === t.template);
+    if (res.static_mode) await addEv({ url: res.input, kind: 'note', detail: `Web mẫu ${res.static_mode.reason} khi chạy JavaScript — đã quét bản HTML tĩnh. Tính năng chỉ hiện khi chạy JavaScript (chat, bộ lọc động…) có thể thiếu: sale kiểm tra lại mục 2.`, verification: 'unverified' });
     const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (mainLoc ? perLang(urlsOf(t)) : (t.url_count || 0)), 0);
     const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail');
     const prodCount = Math.max(prodByTpl, Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
