@@ -79,6 +79,14 @@ export function detectInPage() {
   const gform = iframeSrcs.find((s) => /docs\.google\.com\/forms|forms\.gle/.test(s));
   if (contactForms.length) add('CONTACT_FORM', `${contactForms.length} form có trường liên hệ (${contactForms.map((f) => [...f.querySelectorAll('input[type=email],input[type=tel],textarea')].map((i) => i.type || i.tagName.toLowerCase()).join('+')).slice(0, 2).join('; ')})`);
   else if (gform) add('CONTACT_FORM', 'Google Form nhúng');
+  // Landing đăng ký: form ≥ 5 trường, có ô lựa chọn, nội dung đăng ký/hợp tác (không phải đăng nhập, thanh toán, giỏ hàng)
+  const leadForm = qa('form').filter(shown).find((f) => {
+    const fields = f.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea').length;
+    const choices = f.querySelectorAll('input[type=radio], input[type=checkbox], select').length;
+    const t = (f.innerText || '').toLowerCase();
+    return fields >= 5 && choices >= 2 && /(đăng ký|hợp tác|đại lý|nhà phân phối|nhận báo giá|register|partner|distributor|get a quote)/.test(t) && !/(đăng nhập|mật khẩu|login|password|thanh toán|đặt hàng|checkout|giỏ hàng)/.test(t);
+  });
+  if (leadForm) add('LANDING', `Trang đăng ký có form ${leadForm.querySelectorAll('input:not([type=hidden]), select, textarea').length} trường: "${short(label(leadForm.closest('section,div') || leadForm), 70)}"`);
 
   // ---------- Kênh liên hệ ----------
   const zalo = findLink((l) => hostIs(l, 'zalo.me', 'chat.zalo.me', 'oa.zalo.me', 'zalo.vn'));

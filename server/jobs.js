@@ -181,19 +181,18 @@ export async function ingest(job, res) {
     // Khối lượng suy luận từ nhóm URL
     const tpl = res.templates || [];
     // nhóm URL "phẳng" (không có chữ san-pham trong đường dẫn) nhưng nội dung là trang sản phẩm → coi là chi tiết sản phẩm
-    const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : t.kind === 'other' ? 'other' : t.template);
+    // nhóm "khác" khác độ sâu đường dẫn là các loại trang khác nhau (vd /doi-tac và /doi-tac/sieu-thi) → đếm riêng
+    const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : t.template);
     // trang lẻ không rõ loại (nhóm "other" chỉ 1 URL) dùng chung mẫu trang nội dung → không tính thành mẫu trang riêng
     const oneOff = (t) => t.kind === 'other' && !t.detected && (t.url_count || 0) < 2;
     const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart'].includes(t.kind) && !oneOff(t)).map(tplKey));
     const quantities = {};
+    // Số mẫu trang theo nhóm đường dẫn (ổn định giữa các lần quét). Số kiểu bố cục so theo cấu trúc trang chỉ để sale tham khảo:
+    // đếm cấu trúc dao động ±1–2 tùy trang lấy mẫu, mà mỗi cấp gói chênh vài triệu → không dùng để tính tiền.
     const L = res.layouts;
-    if (L?.count) { // đếm bố cục theo cấu trúc trang thật (khớp tiêu chí "Bố cục trang web" S1–S8 của matbao.ws)
-      const parts = L.groups.map((g) => `${g.urls[0].replace(/^https?:\/\/[^/]+/, '') || '/'}${g.count > 1 ? ` (+${g.count - 1} trang cùng bố cục)` : ''}`);
-      const code = await addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${L.count} bố cục khác nhau (so cấu trúc trang): ${parts.join('; ')}${L.unsampled?.length ? `; nhóm chưa quét: ${L.unsampled.join(', ')}` : ''}`, verification: 'inferred' });
-      featureEv.PAGES = { codes: [code], best: 'inferred' };
-      quantities.PAGES = L.count;
-    } else if (distinct.size) {
-      const code = await addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${distinct.size} nhóm mẫu trang: ${[...distinct].join(', ')} (từ ${res.coverage?.discovered ?? 0} URL phát hiện)`, verification: 'inferred' });
+    if (distinct.size) {
+      const layoutNote = L?.count ? ` — so cấu trúc trang thấy ${L.count} kiểu bố cục (tham khảo; sửa số mẫu trang nếu khách cần đúng từng bố cục)` : '';
+      const code = await addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${distinct.size} nhóm mẫu trang: ${[...distinct].join(', ')} (từ ${res.coverage?.discovered ?? 0} URL phát hiện)${layoutNote}`, verification: 'inferred' });
       featureEv.PAGES = { codes: [code], best: 'inferred' };
       quantities.PAGES = distinct.size;
     }
@@ -225,6 +224,7 @@ export async function ingest(job, res) {
       const code = await addEv({ url: res.input, kind: 'storage', feature: 'HOSTING_STORAGE', detail: `Dự đoán ~${storage.gb} GB lưu trữ: ${storage.how}`, verification: 'inferred' });
       featureEv.HOSTING_STORAGE = { codes: [code], best: 'inferred' }; quantities.HOSTING_STORAGE = storage.gb;
     }
+    if (featureEv.MULTILANG) quantities.MULTILANG = Math.max(1, (res.metrics?.max_languages || 2) - 1);
     const volumes = { urls: totalUrls, templates: quantities.PAGES ?? null, products: prodCount || 0, posts: postCount || 0, storage };
 
     // Độ phức tạp web mẫu → mức may đo M1–M8 (quyết định gói tối thiểu và vị trí giá trong khoảng của gói)

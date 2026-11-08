@@ -12,7 +12,8 @@ function measureSection(s, economy) {
 <p>Mức thiết kế <b>M${esc(dl.quantity)}</b> được xác định theo bảng tiêu chí đo trên web mẫu <b>${esc(host)}</b>${c.at ? ` (đo ngày ${esc(String(c.at).slice(0, 10))})` : ''}. Tính năng và số trang đã tính trong gói nên không cộng lại ở đây.</p>
 <table><thead><tr><th>Tiêu chí</th><th>Cách đo</th><th>Kết quả trên web mẫu</th><th>Mức</th><th style="text-align:right">Điểm</th></tr></thead><tbody>
 ${c.rows.map((x) => `<tr><td>${esc(x.title)}</td><td class="muted">${esc(x.how)}</td><td>${esc(x.value)}</td><td>${esc(x.label)}</td><td class="n">${x.pts}</td></tr>`).join('')}
-<tr class="total"><td colspan="4">Tổng điểm → mức thiết kế</td><td class="n">${c.score} → M${esc(dl.quantity)}</td></tr></tbody></table>
+<tr class="total"><td colspan="4">Tổng điểm → mức thiết kế theo đo lường</td><td class="n">${c.score} → M${esc(c.level)}</td></tr></tbody></table>
+${Number(dl.quantity) !== Number(c.level) ? `<p>Mức áp dụng <b>M${esc(dl.quantity)}</b> ${Number(dl.quantity) > Number(c.level) ? 'cao' : 'thấp'} hơn mức đo M${esc(c.level)} — điều chỉnh theo đánh giá thiết kế của web mẫu (những yếu tố máy đo không đo được như ảnh minh họa riêng, số khối nội dung, mức đầu tư giao diện).</p>` : ''}
 <p class="muted">Thang quy đổi: ${esc(c.scale_text || '')}.</p>
 ${economy ? `<p><b>Phương án tiết kiệm:</b> nếu dùng giao diện mẫu dựng sẵn (không làm giống web mẫu) với cùng tính năng — gói ${esc(economy.package || '')}, giá từ <b>${vnd(economy.price)}</b> (trước thuế).</p>` : ''}`;
 }

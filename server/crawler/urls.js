@@ -65,7 +65,7 @@ const KINDS = [
 export function classify(url) {
   const u = new URL(url);
   const path = u.pathname.replace(/\/page\/\d+$/i, '') || '/';
-  if (path === '/' || /^\/(index\.(html?|php))?$/i.test(path)) return { kind: 'home', template: 'home' };
+  if (path === '/' || /^\/(index\.(html?|php))?$/i.test(path) || /^\/[a-z]{2}(-[a-z]{2})?\/?$/i.test(path)) return { kind: 'home', template: 'home' };
   if (u.searchParams.has('s') || u.searchParams.has('q') || u.searchParams.has('keyword')) return { kind: 'search', template: 'search' };
   const segs = path.split('/').filter(Boolean);
   for (const [kind, re] of KINDS) {

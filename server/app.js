@@ -83,7 +83,8 @@ function pkgDataWith(policy) {
   const d = packagesData();
   const price = Number(policy?.hosting_gb_price_year ?? HOSTING_GB_PRICE_DEFAULT);
   const ad = { code: 'ADD_HOSTING_1GB', name: 'Thêm 1 GB dung lượng hosting (gia hạn hằng năm)', price, unit: '1 GB', recurring: 'yearly', source: 'Giả định nội bộ (matbao.ws chưa niêm yết) — sửa ở Đơn giá & chính sách' };
-  return { ...d, addons: [...(d.addons || []).filter((a) => a.code !== ad.code), ad] };
+  const lang = { code: 'ADD_LANGUAGE', name: 'Dựng nội dung ngôn ngữ bổ sung (dịch, dàn trang, nhập liệu)', pct: Number(policy?.extra_language_pct ?? 30), price: 0, unit: '% giá gói', recurring: null, source: 'Giả định nội bộ — sửa ở Đơn giá & chính sách; bỏ nếu khách tự cung cấp bản dịch' };
+  return { ...d, addons: [...(d.addons || []).filter((a) => a.code !== ad.code && a.code !== lang.code), ad, lang] };
 }
 
 app.post('/api/settings', h(async (req, res) => {

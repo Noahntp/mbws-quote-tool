@@ -141,6 +141,15 @@ export function coverage(catalog, packagesData, ctx, feature, qty) {
       if (ad) return { status: 'paid_addon', addons: [{ code: ad.code, name: ad.name, qty: 1, unit_price: ad.price, recurring: ad.recurring }], note: `"${title}" tính phí ${v}` };
     }
   }
+  if (feature.code === 'MULTILANG') {
+    const ad = addons.find((a) => a.code === 'ADD_LANGUAGE');
+    if (ad && qty > 0) {
+      const n = Math.min(Math.round(qty), 5); // ngôn ngữ thứ 2: pct; mỗi ngôn ngữ sau: pct/2; tính tối đa 5
+      const pct = ad.pct * (1 + (n - 1) / 2);
+      const unit = Math.round((ctx.pkg.price.min * pct) / 100 / 100000) * 100000;
+      return { status: 'paid_addon', addons: [{ code: ad.code, name: `${ad.name} (${n} ngôn ngữ bổ sung)`, qty: 1, unit_price: unit, recurring: null }], note: `Gói có đa ngôn ngữ; dựng nội dung ${n} ngôn ngữ bổ sung = ${pct}% giá gói (${ad.pct}% ngôn ngữ đầu, ${ad.pct / 2}% mỗi ngôn ngữ sau)` };
+    }
+  }
   return { status: 'included', note: feature.covered_note || 'Có trong gói' };
 }
 

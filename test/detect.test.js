@@ -120,3 +120,17 @@ test('nhận diện trang chặn máy quét (CAPTCHA / chống bot), không nh�
   assert.equal(botWall({ url: 'https://x.vn/', title: 'Nhà hàng ABC', text: normal }), null);
   assert.equal(botWall({ url: 'https://x.vn/lien-he', title: 'Liên hệ', text: normal, marker: false }), null);
 });
+
+test('Trang đăng ký hợp tác (form nhiều trường có lựa chọn) là landing; form thanh toán / liên hệ ngắn thì không', async () => {
+  const { f } = await detect(`<section><h1>Đăng ký hợp tác bán lẻ</h1><form>
+    <input name="name" placeholder="Họ và tên"><input type="tel" name="phone"><input type="email" name="email">
+    <select name="city"><option>Chọn tỉnh</option><option>HCM</option></select>
+    <label><input type="radio" name="kind" checked> NPP / Đại lý</label><label><input type="radio" name="kind"> Siêu thị</label>
+    <label><input type="checkbox" name="need"> Bảng giá</label><button>Gửi thông tin đăng ký</button></form></section>`);
+  observed(f, 'LANDING');
+  const { f: f2 } = await detect(`<form><h2>Thanh toán</h2><input name="a"><input name="b"><input name="c"><input name="d">
+    <label><input type="radio" name="pay"> COD</label><label><input type="radio" name="pay"> Chuyển khoản</label><button>Đặt hàng</button></form>`);
+  absent(f2, 'LANDING');
+  const { f: f3 } = await detect(`<form><input type="email" placeholder="Email"><textarea></textarea><button>Gửi liên hệ</button></form>`);
+  absent(f3, 'LANDING');
+});

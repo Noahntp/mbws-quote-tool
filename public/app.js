@@ -367,6 +367,9 @@ function measureTableHtml(Q) {
     <td class="n">${x.pts}</td></tr>`;
   return `<details class="measure" open><summary><b>Đo lường web mẫu</b> — ${c.score}/${c.max} điểm → <b>M${c.level} · ${esc(c.name)}</b>${c.enterprise ? ' · Enterprise' : ''}</summary>
     <div class="tablewrap"><table class="rubric"><thead><tr><th>Tiêu chí</th><th>Đo được trên web mẫu</th><th>Mức</th><th class="n">Điểm</th></tr></thead><tbody>${c.rows.map(row).join('')}</tbody></table></div>
+    <div class="row" style="margin-top:8px;gap:8px;align-items:center"><label class="small">Mức áp dụng
+      <select data-qlevel ${edit ? '' : 'disabled'} title="Nâng khi web mẫu đầu tư thiết kế hơn số đo (ảnh minh họa riêng, nhiều khối nội dung…); báo giá ghi rõ mức đo và mức sale chọn">${[1, 2, 3, 4, 5, 6, 7, 8].map((m) => `<option value="${m}" ${m === (Q.design_level || c.level) ? 'selected' : ''}>M${m} – ${LEVEL_NAME[m]}${m === c.level ? ' (theo đo lường)' : ''}</option>`).join('')}</select></label>
+      ${Q.design_level && Q.design_level !== c.level ? chip(`sale chọn M${Q.design_level}, đo được M${c.level}`, 'warn') : ''}</div>
     <p class="small muted" style="margin:6px 0 0">Thang: ${esc(c.scale_text || '')}. Tính năng, số trang, số sản phẩm đã tính trong gói — <b>không cộng lại</b> vào điểm này. Bảng này in kèm báo giá gửi khách.</p></details>`;
 }
 // Hai phương án cho khách chọn: làm giống web mẫu (theo mức đo) hoặc tiết kiệm (giao diện mẫu dựng sẵn, đủ tính năng)
@@ -778,7 +781,7 @@ async function viewPackages() {
 function viewSettings() {
   const m = S.meta; const cat = m.catalog;
   const rc = m.rate_card; const pol = m.policy;
-  const polFields = [['target_margin_pct', 'Biên mục tiêu %'], ['min_margin_pct', 'Biên tối thiểu %'], ['vat_pct', 'VAT %'], ['overhead_pct', 'Chi phí chung % (nếu đơn giá chưa gồm)'], ['package_cost_pct', 'Chi phí gói chuẩn % giá niêm yết'], ['sales_max_discount_pct', 'Sales giảm tối đa %'], ['hosting_gb_price_year', 'Giá thêm 1 GB hosting / năm (VND, giả định)'], ['rounding_step', 'Bước làm tròn (VND)'], ['quote_valid_days', 'Hiệu lực báo giá (ngày)']];
+  const polFields = [['target_margin_pct', 'Biên mục tiêu %'], ['min_margin_pct', 'Biên tối thiểu %'], ['vat_pct', 'VAT %'], ['overhead_pct', 'Chi phí chung % (nếu đơn giá chưa gồm)'], ['package_cost_pct', 'Chi phí gói chuẩn % giá niêm yết'], ['sales_max_discount_pct', 'Sales giảm tối đa %'], ['hosting_gb_price_year', 'Giá thêm 1 GB hosting / năm (VND, giả định)'], ['extra_language_pct', 'Dựng nội dung ngôn ngữ thứ 2 (% giá gói, giả định)'], ['rounding_step', 'Bước làm tròn (VND)'], ['quote_valid_days', 'Hiệu lực báo giá (ngày)']];
   const today = new Date().toISOString().slice(0, 10);
   $app.innerHTML = `<h1>Đơn giá & chính sách</h1>
   <p class="muted">Mỗi thay đổi tạo phiên bản mới có ngày hiệu lực. Báo giá đã duyệt giữ snapshot giá trị cũ nên không bị ảnh hưởng. ${can('settings.edit') ? '' : 'Chỉ quản lý giá / quản trị được sửa.'}</p>
@@ -787,7 +790,7 @@ function viewSettings() {
     <table><tbody>${Object.entries(cat.roles).map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td><td class="n"><input type="number" data-rc="${k}" value="${esc(rc?.data[k] ?? '')}" style="width:120px"> ₫/giờ</td></tr>`).join('')}</tbody></table>
     <div class="row" style="margin-top:8px"><label class="f">Mã phiên bản mới<input id="rc_ver" value="RC-${today}"></label><label class="f">Hiệu lực từ<input id="rc_from" type="date" value="${today}"></label><label class="f" style="flex:1">Ghi chú<input id="rc_note"></label><button class="primary" data-act="saveRc" ${can('settings.edit') ? '' : 'disabled'}>Lưu phiên bản</button></div></div>
   <div class="panel"><h3 style="margin-top:0">Chính sách giá — ${esc(pol?.version)} (từ ${esc(pol?.effective_from)})</h3><p class="small muted">${esc(pol?.note || '')}</p>
-    <div class="grid2">${polFields.map(([k, l]) => `<label class="f">${l}<input type="number" step="any" data-pol="${k}" value="${esc(pol?.data[k] ?? (k === 'hosting_gb_price_year' ? 500000 : ''))}"></label>`).join('')}
+    <div class="grid2">${polFields.map(([k, l]) => `<label class="f">${l}<input type="number" step="any" data-pol="${k}" value="${esc(pol?.data[k] ?? ({ hosting_gb_price_year: 500000, extra_language_pct: 30 }[k] ?? ''))}"></label>`).join('')}
     <label class="f">Kiểu làm tròn<select data-pol="rounding_mode">${['up', 'nearest', 'down'].map((x) => `<option ${pol?.data.rounding_mode === x ? 'selected' : ''}>${x}</option>`).join('')}</select></label></div>
     <label class="f">Điều kiện thanh toán mặc định<input data-pol="default_payment_terms" value="${esc(pol?.data.default_payment_terms || '')}"></label>
     <div class="row" style="margin-top:8px"><label class="f">Mã phiên bản mới<input id="pol_ver" value="POL-${today}"></label><label class="f">Hiệu lực từ<input id="pol_from" type="date" value="${today}"></label><button class="primary" data-act="savePol" ${can('settings.edit') ? '' : 'disabled'}>Lưu phiên bản</button></div></div>
