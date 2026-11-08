@@ -10,6 +10,7 @@ import { launchChromium, devicesPreset, IS_SERVERLESS } from './browser.js';
 import { normalizeInput, normalizeUrl, isHtmlCandidate, sameSite, dedupeKey, groupTemplates, sampleUrls, parseRobots, robotsAllows, classify } from './urls.js';
 import { assertPublicUrl, assertPublicHost, safeFetchText } from './ssrf.js';
 import { detectInPage } from './detect.js';
+import { layoutSignatureInPage, clusterLayouts } from './layout.js';
 
 export const CRAWLER_VERSION = 'mbws-crawler/0.1 (playwright 1.56)';
 const UA_TOKEN = 'MBWS-QuoteBot';
@@ -184,6 +185,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       }
       const d = await p.evaluate(detectInPage);
       page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind; page.metrics = d.metrics;
+      page.layout = await p.evaluate(layoutSignatureInPage).catch(() => null);
       if (!page.blocked) page.features = d.features;
       if (d.generator && !result.generator) result.generator = d.generator;
       d.links.forEach((h) => addUrl(h, finalUrl));
@@ -251,6 +253,10 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     const detected = kinds.length && kinds.filter((k) => k === kinds[0]).length * 2 >= sampled.length ? kinds[0] : null;
     return { template: g.template, kind: g.kind, url_count: g.urls.length, examples: g.urls.slice(0, 5), sampled: sampled.length, detected };
   });
+  // Bố cục theo cấu trúc trang thật + nhóm URL chưa kịp quét (mỗi nhóm coi như có thể là 1 bố cục riêng)
+  const lay = clusterLayouts(result.pages);
+  const unsampled = result.templates.filter((t) => !t.sampled && !['policy', 'search', 'account', 'cart'].includes(t.kind) && !(t.kind === 'other' && t.url_count < 2));
+  result.layouts = { count: lay.length + unsampled.length, groups: lay, unsampled: unsampled.map((t) => t.template) };
   const smCount = (re) => [...sitemapOf.values()].filter((n) => re.test(n)).length;
   result.sitemap.product_urls = smCount(/product|san-?pham|sanpham/);
   result.sitemap.post_urls = smCount(/post|bai-?viet|tin-?tuc|news|blog|article/);

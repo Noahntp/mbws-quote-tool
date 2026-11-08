@@ -10,6 +10,7 @@ import { waitUntil } from '@vercel/functions';
 import { one, all, run, tx, audit, DATA_DIR, ROOT, loadJson, IS_SERVERLESS } from './db.js';
 import { assessComplexity, measureFromScan } from './complexity.js';
 import { estimateStorage } from './volume.js';
+import { classify } from './crawler/urls.js';
 
 const MAX_ATTEMPTS = 2;
 const BUDGET_MS = Number(process.env.CRAWLER_BUDGET_MS || (IS_SERVERLESS ? 190000 : 240000));
@@ -185,20 +186,33 @@ export async function ingest(job, res) {
     const oneOff = (t) => t.kind === 'other' && !t.detected && (t.url_count || 0) < 2;
     const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart'].includes(t.kind) && !oneOff(t)).map(tplKey));
     const quantities = {};
-    if (distinct.size) {
+    const L = res.layouts;
+    if (L?.count) { // đếm bố cục theo cấu trúc trang thật (khớp tiêu chí "Bố cục trang web" S1–S8 của matbao.ws)
+      const parts = L.groups.map((g) => `${g.urls[0].replace(/^https?:\/\/[^/]+/, '') || '/'}${g.count > 1 ? ` (+${g.count - 1} trang cùng bố cục)` : ''}`);
+      const code = await addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${L.count} bố cục khác nhau (so cấu trúc trang): ${parts.join('; ')}${L.unsampled?.length ? `; nhóm chưa quét: ${L.unsampled.join(', ')}` : ''}`, verification: 'inferred' });
+      featureEv.PAGES = { codes: [code], best: 'inferred' };
+      quantities.PAGES = L.count;
+    } else if (distinct.size) {
       const code = await addEv({ url: res.input, kind: 'templates', feature: 'PAGES', detail: `${distinct.size} nhóm mẫu trang: ${[...distinct].join(', ')} (từ ${res.coverage?.discovered ?? 0} URL phát hiện)`, verification: 'inferred' });
       featureEv.PAGES = { codes: [code], best: 'inferred' };
       quantities.PAGES = distinct.size;
     }
-    const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (t.url_count || 0), 0);
+    // Web nhiều ngôn ngữ (/vi/…, /en/…): sản phẩm, bài viết có bản ở mỗi ngôn ngữ → chỉ đếm một ngôn ngữ
+    const locOf = (u) => { try { const m = new URL(u).pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)(?:\/|$)/i); return m ? m[1].toLowerCase() : null; } catch { return null; } };
+    const locCount = {}; for (const u of res.discovered || []) { const l = locOf(u); if (l) locCount[l] = (locCount[l] || 0) + 1; }
+    const locales = Object.keys(locCount).filter((l) => locCount[l] >= 2);
+    const mainLoc = locales.length >= 2 ? locales.sort((a, b) => locCount[b] - locCount[a])[0] : null;
+    const perLang = (urls) => (mainLoc ? urls.filter((u) => locOf(u) === mainLoc) : urls).length;
+    const urlsOf = (t) => (res.discovered || []).filter((u) => classify(u).template === t.template);
+    const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (mainLoc ? perLang(urlsOf(t)) : (t.url_count || 0)), 0);
     const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail');
-    const prodCount = Math.max(prodByTpl, res.sitemap?.product_urls || 0);
+    const prodCount = Math.max(prodByTpl, Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
     if (prodCount) {
       const how = (res.sitemap?.product_urls || 0) >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
       const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prodCount;
     }
-    const postCount = Math.max(sumUrls((t) => t.template === 'blog:detail'), res.sitemap?.post_urls || 0);
+    const postCount = Math.max(sumUrls((t) => t.template === 'blog:detail'), Math.round((res.sitemap?.post_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
     if (postCount) {
       const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_POSTS = { codes: [code], best: 'inferred' }; quantities.DATA_POSTS = postCount;

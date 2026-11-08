@@ -90,6 +90,8 @@ export function packagePrice(ctx, hint) {
 export function coverage(catalog, packagesData, ctx, feature, qty) {
   const addons = packagesData.addons || [];
   if (feature.capacity === 'design_level') {
+    // Làm GIỐNG một web cụ thể = thiết kế riêng → dòng HERO. Dòng ZERO dùng giao diện mẫu dựng sẵn (phương án "Tiết kiệm").
+    if (ctx.line.id === 'WEB_ZERO') return { status: 'not_included', hard: true, note: 'Gói ZERO dùng giao diện mẫu dựng sẵn — làm giống web mẫu cần dòng HERO (thiết kế riêng)' };
     const lv = levelOf(criterionValue(ctx, 'Giao diện thiết kế theo yêu cầu'));
     return lv != null && qty <= lv ? { status: 'included', note: `May đo M${lv}` } : { status: 'not_included', hard: true, note: `Gói chỉ đến M${lv ?? '?'}, yêu cầu M${qty}` };
   }
@@ -100,8 +102,8 @@ export function coverage(catalog, packagesData, ctx, feature, qty) {
     // Vượt sức chứa: mỗi mẫu trang thêm tính theo đơn giá mẫu trang CỦA CHÍNH GÓI (giá gói ÷ số mẫu trang) — dễ giải thích,
     // không bao giờ để 1 mẫu trang đắt hơn cả gói (trước đây tính theo giờ công đầy đủ ~4,7 tr/mẫu).
     const over = qty - cap;
-    // Chỉ cho mua thêm ít (≈25% sức chứa, tối thiểu 1); vượt nhiều hơn phải lên gói lớn hơn (như matbao.ws bán theo cấp sitemap)
-    const allowed = Math.max(1, Math.round(cap * 0.25));
+    // matbao.ws bán theo cấp bố cục (S1–S8): chỉ cho thêm 1 mẫu trang lẻ; cần nhiều hơn phải lên gói đúng cấp
+    const allowed = 1;
     const maxCap = Math.max(0, ...packageList(packagesData).map((c) => catalog.sitemap_capacity[String(levelOf(criterionValue(c, 'Bố cục trang web')))] ?? 0));
     if (over > allowed && qty <= maxCap) return { status: 'not_included', hard: true, capacity: cap, note: `Sitemap S${lv} ~${cap} mẫu trang, cần ${qty} — vượt quá nhiều, cần gói lớn hơn` };
     const unit = Math.max(100000, Math.round(ctx.pkg.price.min / Math.max(cap, 1) / 100000) * 100000);

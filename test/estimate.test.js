@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { coverage, findPackage, featureTiers } from '../server/estimate.js';
+import { coverage, findPackage, featureTiers, recommendPackages, buildAutoLines } from '../server/estimate.js';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('../data/catalog.json', import.meta.url)));
 const packages = JSON.parse(fs.readFileSync(new URL('../data/packages.json', import.meta.url)));
@@ -41,9 +41,26 @@ test('vượt số sản phẩm của gói → mua thêm 500.000 ₫ / 20 sản 
   assert.equal(c.addons[0].qty, 2); // ZERO 1 cho 30 SP, vượt 40 → 2 × 20
 });
 
-test('mức may đo vượt gói thì gói không phù hợp', () => {
+test('làm giống web mẫu cần dòng HERO đủ mức may đo; ZERO (giao diện dựng sẵn) chỉ cho phương án tiết kiệm', () => {
   assert.equal(cov('ZERO 1', 'DESIGN_LEVEL', 3), 'not_included');
-  assert.equal(cov('ZERO 6', 'DESIGN_LEVEL', 3), 'included');
+  assert.equal(cov('ZERO 6', 'DESIGN_LEVEL', 3), 'not_included'); // ZERO 6 cũng M3 nhưng là giao diện dựng sẵn
+  assert.equal(cov('HERO 1', 'DESIGN_LEVEL', 3), 'included');
+  assert.equal(cov('HERO 1', 'DESIGN_LEVEL', 4), 'not_included');
+  assert.equal(cov('HERO 4', 'DESIGN_LEVEL', 4), 'included');
+});
+
+test('đúng giá thật của 2 web mẫu: happyrice (7 bố cục) ≈ 7,11 tr, drinkwana (10 bố cục, 2 ngôn ngữ) ≈ 18 tr', () => {
+  const rates = { PM: 200000, DESIGN: 200000, FE: 200000, BE: 200000, DATA: 150000, QA: 150000 };
+  const policy = { target_margin_pct: 30, min_margin_pct: 25, rounding_step: 1000, package_cost_pct: 60 };
+  const quote = (feats) => {
+    const reqs = feats.map(([feature, quantity], i) => ({ id: i + 1, code: 'R' + i, feature, quantity, decision: 'include' }));
+    return recommendPackages(catalog, packages, { requirements: reqs, lines: buildAutoLines(catalog, reqs), rates, policy, priceHint: { level: 1, fraction: 0.5 } }).best;
+  };
+  const common = [['SEARCH', 1], ['CONTACT_FORM', 1], ['PHONE_CALL', 1], ['SOCIAL', 1], ['BLOG', 1], ['PRODUCT_CATALOG', 1], ['FILTER', 1], ['MAP', 1], ['DESIGN_LEVEL', 1]];
+  const happy = quote([...common, ['CART', 1], ['CHAT_ZALO', 1], ['MEMBER_LOGIN', 1], ['PAGES', 7], ['DATA_PRODUCTS', 6], ['DATA_POSTS', 8]]);
+  assert.equal(happy.code, 'HERO 1'); assert.equal(happy.price_list, 7000000);
+  const wana = quote([...common, ['MULTILANG', 1], ['ANALYTICS', 1], ['PAGES', 10], ['DATA_PRODUCTS', 13]]);
+  assert.ok(wana.price_list >= 14000000 && wana.price_list <= 18000000, `drinkwana ${wana.code} ${wana.price_list}`);
 });
 
 test('dung lượng hosting: gói gồm sẵn GB, vượt thì mua thêm theo GB; "Theo dự án" tính như mức cao nhất', async () => {
