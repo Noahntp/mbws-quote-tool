@@ -29,7 +29,7 @@ Lấy một trong hai cách:
   ```bash
   vercel env pull .env.worker --environment=production
   ```
-  Lệnh này tạo file `.env.worker`; lấy dòng `DATABASE_URL=...` trong đó.
+  Lệnh này tạo file `.env.worker`. Đặt file này trong thư mục `mbws-quote-tool` thì bộ quét **tự đọc**, không cần đặt biến `DATABASE_URL` bằng tay. Cũng có thể tự tạo file `.env.worker` chỉ gồm một dòng `DATABASE_URL=postgres://...`.
 
 > Đây là **mật khẩu cơ sở dữ liệu**. Không gửi qua chat công khai, không đưa lên git. File `.env*` đã được git bỏ qua.
 
@@ -101,7 +101,7 @@ docker logs -f mbws-scan
    ```bat
    @echo off
    cd /d %~dp0
-   set DATABASE_URL=postgres://...
+   rem DATABASE_URL đọc từ file .env.worker cùng thư mục
    :loop
    call npm run scan-worker
    timeout /t 10

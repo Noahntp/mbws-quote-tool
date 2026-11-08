@@ -12,7 +12,7 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "sync:packages": "node --disable-warning=ExperimentalWarning scripts/sync-packages.js",
     "setup": "npx playwright install chromium",
-    "scan-worker": "node --disable-warning=ExperimentalWarning server/scan-worker.js",
+    "scan-worker": "node --env-file-if-exists=.env.worker --disable-warning=ExperimentalWarning server/scan-worker.js",
     "eval:scan": "node --disable-warning=ExperimentalWarning scripts/eval-scan.js",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\""
   },

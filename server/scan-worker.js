@@ -6,6 +6,9 @@
 import os from 'node:os';
 
 process.env.SCAN_WORKER = '1'; // phải đặt trước khi nạp các module bên dưới
+// File .env.worker lấy bằng "vercel env pull" có cả biến hệ thống của Vercel (VERCEL=1…) → bỏ đi,
+// nếu không bộ quét tưởng đang chạy trên Vercel và dùng Chromium bản serverless.
+for (const k of Object.keys(process.env)) if (k === 'VERCEL' || k.startsWith('VERCEL_') || k === 'AWS_LAMBDA_FUNCTION_NAME') delete process.env[k];
 const { detectFakeIp } = await import('./netcheck.js');
 const { ready, run, DRIVER, closeDb } = await import('./db.js');
 const jobs = await import('./jobs.js');
