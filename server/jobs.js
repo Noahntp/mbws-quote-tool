@@ -207,7 +207,7 @@ export async function ingest(job, res) {
     const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : t.template);
     // trang lẻ không rõ loại (nhóm "other" chỉ 1 URL) dùng chung mẫu trang nội dung → không tính thành mẫu trang riêng
     const oneOff = (t) => t.kind === 'other' && !t.detected && (t.url_count || 0) < 2;
-    const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart'].includes(t.kind) && !oneOff(t)).map(tplKey));
+    const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart', 'junk'].includes(t.kind) && !oneOff(t)).map(tplKey));
     const quantities = {};
     // Số mẫu trang theo nhóm đường dẫn (ổn định giữa các lần quét). Số kiểu bố cục so theo cấu trúc trang chỉ để sale tham khảo:
     // đếm cấu trúc dao động ±1–2 tùy trang lấy mẫu, mà mỗi cấp gói chênh vài triệu → không dùng để tính tiền.

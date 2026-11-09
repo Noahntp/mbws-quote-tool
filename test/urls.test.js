@@ -61,3 +61,13 @@ test('chỉ cần gõ tên miền: mọi dạng nhập đều về trang chủ',
   assert.equal(domainOf('https://www.abc.vn/'), 'abc.vn');
   for (const bad of ['', 'abc', 'localhost', '192.168.1.1', 'http://10.0.0.1/', 'ftp://abc.vn', '-abc.vn', 'javascript:alert(1)']) assert.equal(normalizeDomain(bad), null, bad);
 });
+
+test('web PHP kiểu cũ: hậu tố -Sp.html là sản phẩm, -tt.html là tin; phân trang cùng mẫu danh sách; đường dẫn rác bỏ qua', async () => {
+  const { classify } = await import('../server/crawler/urls.js');
+  assert.equal(classify('https://inoxkienan.com/Lo-Nuong-Banh-Mi-Xoay-37-Sp.html').template, 'product:detail');
+  assert.equal(classify('https://inoxkienan.com/Huong-Dan-Bao-Tri-Lo-Xoay-456-tt.html').template, 'blog:detail'); // không nhầm là trang chính sách
+  assert.equal(classify('https://inoxkienan.com/tin-tuc.html/page-20').template, 'blog:list');
+  assert.equal(classify('https://x.vn/blog/page/2').template, 'blog:list');
+  assert.equal(classify('https://inoxkienan.com/modules.php?amp%3Bfile=save&name=Gioithieu').kind, 'junk');
+  assert.equal(classify('https://x.vn/chinh-sach-bao-mat').template, 'policy');
+});

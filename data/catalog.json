@@ -58,7 +58,8 @@
   ],
   "base_items": ["PM_DISCOVERY", "BASE_CORE_SETUP", "QA_REGRESSION", "DEL_DEPLOY", "DEL_WARRANTY"],
   "sitemap_capacity_note": "Số mẫu trang riêng ước tính theo cấp sitemap S1–S8 của gói (giả định nội bộ, cần xác nhận).",
-  "sitemap_capacity": { "1": 4, "2": 5, "3": 7, "4": 8, "5": 10, "6": 12, "7": 15, "8": 20 },
+  "sitemap_capacity": { "1": 6, "2": 7, "3": 10, "4": 11, "5": 14, "6": 17, "7": 21, "8": 28 },
+  "sitemap_capacity_note": "S3 theo phụ lục hợp đồng HERO 1 (11/2026): trang chủ + 5–7 trang con + blog tin tức ≈ 10 mẫu trang. Các cấp khác giãn cùng tỉ lệ — GIẢ ĐỊNH, cần đối chiếu phụ lục các gói khác.",
   "features": [
     { "code": "PAGES", "title": "Mẫu trang giao diện riêng", "unit": "mẫu trang", "default_qty": 7, "capacity": "sitemap", "items": [{ "code": "UI_TEMPLATE" }, { "code": "FE_TEMPLATE" }], "questions": [{ "text": "Khách muốn giống phần nào của web mẫu: giao diện, nội dung hay cả luồng nghiệp vụ? Phần nào chắc chắn không làm?", "blocking": false }, { "text": "Có bao nhiêu mẫu trang riêng (trang chủ, danh mục, chi tiết, bài viết, liên hệ...)?", "blocking": true }] },
     { "code": "DESIGN_LEVEL", "title": "Mức may đo giao diện (M1–M8)", "unit": "cấp M", "default_qty": 3, "capacity": "design_level", "items": [], "questions": [{ "text": "Mức tương đồng mong muốn với web mẫu (giống 90–100% hay chỉ tham khảo bố cục)?", "blocking": false }] },

@@ -61,8 +61,9 @@ test('sát giá thật của 2 web mẫu: happyrice (bán hàng, 1 ngôn ngữ) 
   const happy = quote([...common, ['CART', 1], ['CHAT_ZALO', 1], ['MEMBER_LOGIN', 1], ['PAGES', 7], ['DATA_PRODUCTS', 6], ['DATA_POSTS', 8]]);
   assert.equal(happy.code, 'HERO 1'); assert.equal(happy.price_list, 7000000);
   const wana = quote([...common, ['MULTILANG', 1], ['ANALYTICS', 1], ['LANDING', 1], ['PAGES', 8], ['DATA_PRODUCTS', 13]]);
-  // máy đo được ~12 tr; phần còn lại của giá thật (độ đầu tư thiết kế) do sale nâng "Mức áp dụng"
-  assert.ok(wana.price_list >= 11000000 && wana.price_list <= 18000000, `drinkwana ${wana.code} ${wana.price_list}`);
+  // drinkwana 18 tr là hợp đồng làm riêng (phụ lục: dựng lại 5 giao diện + 8 tính năng phát sinh + gói ngôn ngữ), không phải gói HERO;
+  // theo bảng gói, máy ra ~11–14 tr; phần còn lại do sale nâng "Mức áp dụng" / thêm hạng mục
+  assert.ok(wana.price_list >= 10000000 && wana.price_list <= 18000000, `drinkwana ${wana.code} ${wana.price_list}`);
   assert.ok(wana.addons.some((a) => a.code === 'ADD_LANGUAGE'), 'phải tính phần dựng nội dung tiếng Anh');
 });
 
@@ -87,10 +88,23 @@ test('dung lượng hosting: gói gồm sẵn GB, vượt thì mua thêm theo GB
 
 test('mẫu trang vượt sức chứa: mua thêm ít theo đơn giá mẫu của gói; vượt nhiều phải lên gói lớn hơn', () => {
   const pg = feature('PAGES');
-  const z6 = coverage(catalog, packages, findPackage(packages, 'ZERO 6'), pg, 8); // S3 ~7 mẫu, cần 8
+  const z6 = coverage(catalog, packages, findPackage(packages, 'ZERO 6'), pg, 11); // S3 ~10 mẫu (theo phụ lục HERO 1), cần 11
   assert.equal(z6.status, 'capacity');
-  assert.deepEqual(z6.addons.map((a) => [a.code, a.qty, a.unit_price]), [['ADD_TEMPLATE', 1, 600000]]); // 4 tr ÷ 7 ≈ 600k, không phải ~4,7 tr giờ công
-  const z2 = coverage(catalog, packages, findPackage(packages, 'ZERO 2'), pg, 8); // S1 ~4 mẫu, cần 8 → không được "mua lẻ" thay gói
+  assert.deepEqual(z6.addons.map((a) => [a.code, a.qty, a.unit_price]), [['ADD_TEMPLATE', 1, 400000]]); // 4 tr ÷ 10 = 400k, không phải ~4,7 tr giờ công
+  const z2 = coverage(catalog, packages, findPackage(packages, 'ZERO 2'), pg, 11); // S1 ~6 mẫu, cần 11 → không được "mua lẻ" thay gói
   assert.equal(z2.status, 'not_included'); assert.equal(z2.hard, true);
   assert.equal(coverage(catalog, packages, findPackage(packages, 'HERO 8'), pg, 30).status, 'capacity'); // vượt cả gói lớn nhất → vẫn mua thêm được
+  assert.equal(coverage(catalog, packages, findPackage(packages, 'HERO 1'), pg, 10).status, 'included'); // phụ lục HERO 1: trang chủ + 5–7 trang con + blog
+});
+
+test('đúng hợp đồng inoxkienan.com (S04359): gói HERO 1 — 7.000.000 ₫, không phát sinh', () => {
+  const rates = { PM: 200000, DESIGN: 200000, FE: 200000, BE: 200000, DATA: 150000, QA: 150000 };
+  const policy = { target_margin_pct: 30, min_margin_pct: 25, rounding_step: 1000, package_cost_pct: 60 };
+  // số đo khi quét inoxkienan.com (sau khi nhận đúng đường dẫn -Sp.html / -tt.html / phân trang): 9 mẫu trang
+  const feats = [['CART', 1], ['CHAT_ZALO', 1], ['PHONE_CALL', 1], ['MAP', 1], ['SOCIAL', 1], ['BLOG', 1], ['CONTACT_FORM', 1], ['PRODUCT_CATALOG', 1], ['PAGES', 9], ['DATA_PRODUCTS', 200], ['DATA_POSTS', 150], ['HOSTING_STORAGE', 1], ['DESIGN_LEVEL', 1]];
+  const reqs = feats.map(([feature, quantity], i) => ({ id: i + 1, code: 'R' + i, feature, quantity, decision: 'include' }));
+  const best = recommendPackages(catalog, packages, { requirements: reqs, lines: buildAutoLines(catalog, reqs), rates, policy, priceHint: { level: 1, fraction: 0.5 } }).best;
+  assert.equal(best.code, 'HERO 1');
+  assert.equal(best.price_list, 7000000);
+  assert.equal(best.addons.length, 0);
 });

@@ -82,7 +82,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   const discovered = new Map(); // dedupeKey → url
   const addUrl = (raw, base) => {
     const u = normalizeUrl(raw, base);
-    if (!u || !sameSite(u, rootHost) || !isHtmlCandidate(u)) return;
+    if (!u || !sameSite(u, rootHost) || !isHtmlCandidate(u) || classify(u).kind === 'junk') return; // bỏ đường dẫn rác của CMS cũ
     if (!robotsAllows(robots, u)) { result.robots.disallowed = (result.robots.disallowed || 0) + 1; return; }
     const k = dedupeKey(u);
     const key = k.replace(/^(https?:\/\/)www\./, '$1'); // www.x.vn và x.vn là một trang
@@ -292,7 +292,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   });
   // Bố cục theo cấu trúc trang thật + nhóm URL chưa kịp quét (mỗi nhóm coi như có thể là 1 bố cục riêng)
   const lay = clusterLayouts(result.pages);
-  const unsampled = result.templates.filter((t) => !t.sampled && !['policy', 'search', 'account', 'cart'].includes(t.kind) && !(t.kind === 'other' && t.url_count < 2));
+  const unsampled = result.templates.filter((t) => !t.sampled && !['policy', 'search', 'account', 'cart', 'junk'].includes(t.kind) && !(t.kind === 'other' && t.url_count < 2));
   result.layouts = { count: lay.length + unsampled.length, groups: lay, unsampled: unsampled.map((t) => t.template) };
   const smCount = (re) => [...sitemapOf.values()].filter((n) => re.test(n)).length;
   result.sitemap.product_urls = smCount(/product|san-?pham|sanpham/);

@@ -61,10 +61,18 @@ const KINDS = [
   ['booking', /(^|\/)(dat-lich|booking|dat-ban|dat-phong|reservation)(\/|$|\.)/i],
 ];
 
+// Web PHP kiểu cũ (VD /Lo-Nuong-Banh-Mi-37-Sp.html, /Huong-Dan-...-456-tt.html): loại trang ghi bằng hậu tố sau mã số
+const FLAT_SUFFIX = { sp: 'product:detail', p: 'product:detail', pro: 'product:detail', tt: 'blog:detail', tin: 'blog:detail', n: 'blog:detail', news: 'blog:detail', dv: 'service:detail', da: 'project:detail' };
+
 /** Phân loại mẫu trang theo đường dẫn. Trả về {kind, template}. */
 export function classify(url) {
   const u = new URL(url);
-  const path = u.pathname.replace(/\/page\/\d+$/i, '') || '/';
+  // phân trang (/page/2, /page-20, /trang-3) cùng mẫu với trang danh sách gốc
+  const path = u.pathname.replace(/\/(page|trang)[-/]?\d+\/?$/i, '') || '/';
+  // đường dẫn rác của CMS cũ (thực thể HTML bị mã hóa sai: amp%3B…) / điểm gọi xử lý (?file=save) → không phải trang
+  if (/amp(%3B|;)|[?&]file=save\b/i.test(u.search)) return { kind: 'junk', template: 'junk' };
+  const flat = path.match(/^\/[^/]+-\d+-([a-z]{1,4})\.html?$/i);
+  if (flat && FLAT_SUFFIX[flat[1].toLowerCase()]) { const t = FLAT_SUFFIX[flat[1].toLowerCase()]; return { kind: t.split(':')[0], template: t }; }
   if (path === '/' || /^\/(index\.(html?|php))?$/i.test(path) || /^\/[a-z]{2}(-[a-z]{2})?\/?$/i.test(path)) return { kind: 'home', template: 'home' };
   if (u.searchParams.has('s') || u.searchParams.has('q') || u.searchParams.has('keyword')) return { kind: 'search', template: 'search' };
   const segs = path.split('/').filter(Boolean);
