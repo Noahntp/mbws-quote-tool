@@ -264,7 +264,7 @@ export function ready() {
     }
     if (!Number((await q1("SELECT COUNT(*) n FROM settings_versions WHERE kind='policy'")).n)) {
       await r1(`INSERT INTO settings_versions (kind, version, data_json, effective_from, approved_by, note) VALUES ('policy','POL-2026.1',?, '2026-01-01', 3, ?)`,
-        JSON.stringify({ target_margin_pct: 30, min_margin_pct: 25, overhead_pct: 0, package_cost_pct: 60, rounding_step: 1000, rounding_mode: 'up', vat_pct: 10, sales_max_discount_pct: 5, hosting_gb_price_year: 500000, extra_language_pct: 30, quote_valid_days: 30, default_payment_terms: '50% khi ký hợp đồng, 50% khi nghiệm thu bàn giao' }),
+        JSON.stringify({ target_margin_pct: 30, min_margin_pct: 25, overhead_pct: 0, package_cost_pct: 60, rounding_step: 1000, rounding_mode: 'up', vat_pct: 10, sales_max_discount_pct: 5, hosting_gb_price_year: 500000, extra_language_pct: 30, package_upgrade_tolerance_pct: 5, quote_valid_days: 30, default_payment_terms: '50% khi ký hợp đồng, 50% khi nghiệm thu bàn giao' }),
         'Biên mục tiêu 30%, tối thiểu 25%, VAT 10% (cần kế toán xác nhận theo hạng mục). Sales được giảm tối đa 5%, vượt mức cần quản lý giá duyệt. package_cost_pct=60: GIẢ ĐỊNH chi phí nội bộ của gói chuẩn bằng 60% giá niêm yết — cần xác nhận. hosting_gb_price_year=500.000đ: GIẢ ĐỊNH giá thêm 1 GB hosting/năm (matbao.ws chưa niêm yết).');
     }
     if (c) await driver.commit(c);

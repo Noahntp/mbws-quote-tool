@@ -108,3 +108,17 @@ test('đúng hợp đồng inoxkienan.com (S04359): gói HERO 1 — 7.000.000 �
   assert.equal(best.price_list, 7000000);
   assert.equal(best.addons.length, 0);
 });
+
+test('gói rẻ nhất phải làm thêm ngoài gói → nếu gói cao hơn gồm trọn phạm vi chỉ đắt hơn trong ngưỡng thì đề xuất gói đó', () => {
+  const rates = { PM: 200000, DESIGN: 200000, FE: 200000, BE: 200000, DATA: 150000, QA: 150000 };
+  const feats = [['SEARCH', 1], ['CONTACT_FORM', 1], ['BLOG', 1], ['PRODUCT_CATALOG', 1], ['LANDING', 1], ['PAGES', 8], ['DESIGN_LEVEL', 1]];
+  const reqs = feats.map(([feature, quantity], i) => ({ id: i + 1, code: 'R' + i, feature, quantity, decision: 'include' }));
+  const run = (tol) => recommendPackages(catalog, packages, { requirements: reqs, lines: buildAutoLines(catalog, reqs), rates, policy: { target_margin_pct: 30, min_margin_pct: 25, rounding_step: 1000, package_cost_pct: 60, package_upgrade_tolerance_pct: tol }, priceHint: { level: 1, fraction: 0 } }).best;
+  const cheapest = run(0);
+  assert.equal(cheapest.code, 'HERO 1'); // landing làm ngoài gói theo giờ công
+  assert.ok(cheapest.extra_lines.length > 0);
+  const whole = run(100); // ngưỡng rộng → chọn gói gồm trọn landing
+  assert.equal(whole.code, 'HERO 3');
+  assert.equal(whole.extra_lines.length, 0);
+  assert.match(whole.upgrade_reason, /gồm trọn phạm vi/);
+});

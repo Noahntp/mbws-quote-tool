@@ -217,6 +217,16 @@ export function recommendPackages(catalog, packagesData, { requirements, lines, 
     });
   }
   const ranked = results.filter((r) => r.eligible).sort((a, b) => a.price_list - b.price_list || a.package_price.min - b.package_price.min);
+  // Gói rẻ nhất mà còn phải "làm thêm ngoài gói" (tính giờ công) — nếu có gói cao hơn gồm TRỌN phạm vi và chỉ đắt hơn
+  // trong ngưỡng (mặc định 5%), đề xuất gói đó: khách nhận thêm quyền lợi gói, báo giá gọn, không lẫn hạng mục làm riêng.
+  const tol = Number(policy?.package_upgrade_tolerance_pct ?? 5);
+  if (ranked[0]?.extra_lines.length && tol > 0) {
+    const whole = ranked.find((r) => !r.extra_lines.length && r.price_list <= ranked[0].price_list * (1 + tol / 100));
+    if (whole) {
+      whole.upgrade_reason = `Chỉ đắt hơn ${Math.round(((whole.price_list - ranked[0].price_list) / ranked[0].price_list) * 1000) / 10}% so với gói ${ranked[0].code} + làm thêm ngoài gói, nhưng gồm trọn phạm vi trong gói`;
+      ranked.splice(ranked.indexOf(whole), 1); ranked.unshift(whole);
+    }
+  }
   return { best: ranked[0] || null, ranked, ineligible: results.filter((r) => !r.eligible) };
 }
 
