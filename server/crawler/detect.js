@@ -34,7 +34,9 @@ export function detectInPage() {
   const short = (s, n = 60) => s.slice(0, n);
 
   // ---------- Giỏ hàng ----------
-  const addToCart = qa('button[name="add-to-cart"], .add_to_cart_button, .single_add_to_cart_button, form[action*="/cart" i] button, [data-action*="add-to-cart" i], [data-action*="addtocart" i], [class*="add-to-cart" i], [id*="add-to-cart" i], [class*="addtocart" i], [class*="btn-cart" i]').find(isReal);
+  const NOT_BUY = /(liên hệ|báo giá|xem thêm|xem chi tiết|tư vấn|đăng ký|contact|quote|enquir|inquir|read more|learn more|details)/i;
+  const addToCart = qa('button[name="add-to-cart"], .add_to_cart_button, .single_add_to_cart_button, form[action*="/cart" i] button, [data-action*="add-to-cart" i], [data-action*="addtocart" i], [class*="add-to-cart" i], [id*="add-to-cart" i], [class*="addtocart" i], [class*="btn-cart" i]')
+    .find((e) => isReal(e) && !NOT_BUY.test(label(e))); // class kiểu giỏ hàng nhưng chữ "Liên hệ báo giá" = nút xin báo giá
   const cartBtn = buttons.find((e) => /(thêm vào giỏ|cho vào giỏ|add to (cart|bag|basket)|giỏ hàng của bạn)/i.test(label(e)));
   const cartLink = findLink((l) => same(l) && /(^|\/)(gio-hang|cart|checkout|thanh-toan|basket)(\/|$|\?|\.)/.test(l.u.pathname.toLowerCase()));
   const BUY = /^(mua ngay|mua hàng|chọn mua|đặt hàng|đặt mua|buy now|order now)$/i;
@@ -86,7 +88,10 @@ export function detectInPage() {
     const t = (f.innerText || '').toLowerCase();
     return fields >= 5 && choices >= 2 && /(đăng ký|hợp tác|đại lý|nhà phân phối|nhận báo giá|register|partner|distributor|get a quote)/.test(t) && !/(đăng nhập|mật khẩu|login|password|thanh toán|đặt hàng|checkout|giỏ hàng)/.test(t);
   });
-  if (leadForm) add('LANDING', `Trang đăng ký có form ${leadForm.querySelectorAll('input:not([type=hidden]), select, textarea').length} trường: "${short(label(leadForm.closest('section,div') || leadForm), 70)}"`);
+  const landingBuilder = scriptSrcs.some((s) => /ladipage|ldpform|webcake|landingi|unbounce|instapage|leadpages|pagefly|gempages/.test(s)) || /ladipage|webcake/i.test(document.querySelector('meta[name=generator]')?.content || '');
+  const landingPath = /(^|\/)(lp|landing(-page)?|chien-dich|campaign|khuyen-mai|uu-dai|promo)(\/|$|-|\.)/i.test(location.pathname);
+  if (landingBuilder || (landingPath && leadForm)) add('LANDING', landingBuilder ? 'Trang dựng bằng công cụ landing page (LadiPage/Webcake…)' : `Trang landing ${location.pathname} có form đăng ký`);
+  else if (leadForm) add('LANDING', `Form đăng ký ${leadForm.querySelectorAll('input:not([type=hidden]), select, textarea').length} trường: "${short(label(leadForm.closest('section,div') || leadForm), 70)}" — thường chỉ là form liên hệ / đăng ký hợp tác nâng cao, sale xác nhận`, 'inferred');
 
   // ---------- Kênh liên hệ ----------
   const zalo = findLink((l) => hostIs(l, 'zalo.me', 'chat.zalo.me', 'oa.zalo.me', 'zalo.vn'));

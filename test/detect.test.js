@@ -121,16 +121,29 @@ test('nhận diện trang chặn máy quét (CAPTCHA / chống bot), không nh�
   assert.equal(botWall({ url: 'https://x.vn/lien-he', title: 'Liên hệ', text: normal, marker: false }), null);
 });
 
-test('Trang đăng ký hợp tác (form nhiều trường có lựa chọn) là landing; form thanh toán / liên hệ ngắn thì không', async () => {
+test('Form đăng ký hợp tác nhiều trường chỉ là "có thể có" landing (phụ lục drinkwana tính là form biểu mẫu); form thanh toán / liên hệ ngắn thì không', async () => {
   const { f } = await detect(`<section><h1>Đăng ký hợp tác bán lẻ</h1><form>
     <input name="name" placeholder="Họ và tên"><input type="tel" name="phone"><input type="email" name="email">
     <select name="city"><option>Chọn tỉnh</option><option>HCM</option></select>
     <label><input type="radio" name="kind" checked> NPP / Đại lý</label><label><input type="radio" name="kind"> Siêu thị</label>
     <label><input type="checkbox" name="need"> Bảng giá</label><button>Gửi thông tin đăng ký</button></form></section>`);
-  observed(f, 'LANDING');
+  assert.equal(f.LANDING, 'inferred'); // không tự tick: sale xác nhận
   const { f: f2 } = await detect(`<form><h2>Thanh toán</h2><input name="a"><input name="b"><input name="c"><input name="d">
     <label><input type="radio" name="pay"> COD</label><label><input type="radio" name="pay"> Chuyển khoản</label><button>Đặt hàng</button></form>`);
   absent(f2, 'LANDING');
   const { f: f3 } = await detect(`<form><input type="email" placeholder="Email"><textarea></textarea><button>Gửi liên hệ</button></form>`);
   absent(f3, 'LANDING');
+});
+
+test('web B2B: nút class giỏ hàng nhưng chữ "Liên hệ báo giá sỉ" không phải giỏ hàng; form đăng ký dài chỉ là "có thể có" landing', async () => {
+  const { f } = await detect(`<div class="product"><h1>Nước ép dứa</h1><button class="btn add-to-cart">Liên hệ báo giá sỉ</button></div>
+    <section><h2>Đăng ký hợp tác bán lẻ</h2><form><input name="a"><input type="tel" name="b"><input type="email" name="c">
+    <select name="d"><option>Tỉnh</option></select><label><input type="radio" name="k"> NPP</label><label><input type="radio" name="k"> Siêu thị</label>
+    <label><input type="checkbox" name="n"> Bảng giá</label><button>Gửi đăng ký</button></form></section>`, 'https://brand.test/vi/doi-tac/sieu-thi');
+  notTicked(f, 'CART');
+  notTicked(f, 'LANDING');
+  assert.equal(f.LANDING, 'inferred');
+  // trang dựng bằng công cụ landing (LadiPage) thì đúng là landing page
+  const { f: f2 } = await detect(`<script src="https://w.ladicdn.com/v2/source/ladipage.min.js"></script><h1>Ưu đãi tháng 11</h1>`, 'https://brand.test/');
+  observed(f2, 'LANDING');
 });
