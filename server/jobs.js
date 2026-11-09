@@ -137,15 +137,20 @@ async function nextCode(table, projectId, prefix) {
 }
 
 const RANK = { observed: 3, client: 3, inferred: 2, unverified: 1 };
+// Sale đã tự tick / bỏ tick / sửa mục này (có trong lịch sử thao tác) → quét lại không đổi quyết định của sale
+const touchedBySale = async (reqId) => !!(await one("SELECT 1 AS x FROM audit_log WHERE entity='requirement' AND entity_id=? AND user_id IS NOT NULL LIMIT 1", reqId));
 // Khối lượng tự điền từ web mẫu (sale sửa được; số sale nhập không bị lần quét sau ghi đè)
 const AUTO_QTY = ['PAGES', 'DATA_PRODUCTS', 'DATA_POSTS', 'HOSTING_STORAGE'];
 
 // Phạm vi của web mẫu = tính năng THẤY RÕ trên web (dẫn chứng observed) + số mẫu trang đếm được.
 // Tính năng khách thêm từ mô tả hay tick tay sau đó là phần PHÁT SINH so với giá gốc này.
 export async function baselineFromEvidence(projectId) {
-  const seen = new Set((await all("SELECT DISTINCT feature FROM evidence WHERE project_id=? AND verification='observed' AND feature IS NOT NULL", projectId)).map((r) => r.feature));
-  for (const f of AUTO_QTY) if (await one('SELECT 1 AS x FROM evidence WHERE project_id=? AND feature=?', projectId, f)) seen.add(f); // khối lượng web mẫu
-  if (await one("SELECT 1 AS x FROM evidence WHERE project_id=? AND kind='complexity'", projectId)) seen.add('DESIGN_LEVEL'); // mức may đo theo độ phức tạp web mẫu
+  const runIds = (await all('SELECT MAX(id) AS id FROM analysis_runs WHERE project_id=? GROUP BY url', projectId)).map((r) => Number(r.id)).filter(Boolean);
+  if (!runIds.length) return {};
+  const inRuns = `run_id IN (${runIds.map(() => '?').join(',')})`;
+  const seen = new Set((await all(`SELECT DISTINCT feature FROM evidence WHERE project_id=? AND ${inRuns} AND verification='observed' AND feature IS NOT NULL`, projectId, ...runIds)).map((r) => r.feature));
+  for (const f of AUTO_QTY) if (await one(`SELECT 1 AS x FROM evidence WHERE project_id=? AND ${inRuns} AND feature=?`, projectId, ...runIds, f)) seen.add(f); // khối lượng web mẫu
+  if (await one(`SELECT 1 AS x FROM evidence WHERE project_id=? AND ${inRuns} AND kind='complexity'`, projectId, ...runIds)) seen.add('DESIGN_LEVEL'); // mức may đo theo độ phức tạp web mẫu
   const features = {};
   for (const r of await all('SELECT feature, quantity FROM requirements WHERE project_id=? AND feature IS NOT NULL', projectId)) if (seen.has(r.feature)) features[r.feature] = r.quantity ?? 1;
   return features;
@@ -226,6 +231,11 @@ export async function ingest(job, res) {
     const perLang = (urls) => (mainLoc ? urls.filter((u) => locOf(u) === mainLoc) : urls).length;
     const urlsOf = (t) => (res.discovered || []).filter((u) => classify(u).template === t.template);
     if (res.static_mode) await addEv({ url: res.input, kind: 'note', detail: `Web mẫu ${res.static_mode.reason} khi chạy JavaScript — đã quét bản HTML tĩnh. Tính năng chỉ hiện khi chạy JavaScript (chat, bộ lọc động…) có thể thiếu: sale kiểm tra lại mục 2.`, verification: 'unverified' });
+    if (featureEv.PRODUCT_CATALOG && featureEv.PRODUCT_CATALOG.best !== 'observed' && tpl.some((t) => tplKey(t) === 'product:detail' && t.url_count >= 3)) {
+      const n = tpl.filter((t) => tplKey(t) === 'product:detail').reduce((x, t) => x + t.url_count, 0);
+      const code = await addEv({ url: res.input, kind: 'feature', feature: 'PRODUCT_CATALOG', detail: `${n} trang chi tiết sản phẩm (web không hiện giá — liên hệ báo giá)`, verification: 'observed' });
+      featureEv.PRODUCT_CATALOG.codes.push(code); featureEv.PRODUCT_CATALOG.best = 'observed';
+    }
     const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (mainLoc ? perLang(urlsOf(t)) : (t.url_count || 0)), 0);
     const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail');
     const prodCount = Math.max(prodByTpl, Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
@@ -277,6 +287,10 @@ export async function ingest(job, res) {
         if (AUTO_QTY.includes(feature) && existing.source_kind !== 'client' && quantities[feature] != null) await run('UPDATE requirements SET quantity=?, decision=? WHERE id=?', quantities[feature], existing.decision === 'pending' ? 'include' : existing.decision, existing.id);
         // (giữ lựa chọn "Tiết kiệm" = đã bỏ mức may đo; chỉ bật lại nếu đang chờ quyết định)
         if (feature === 'DESIGN_LEVEL' && existing.source_kind !== 'client') await run('UPDATE requirements SET quantity=?, decision=? WHERE id=?', quantities.DESIGN_LEVEL, existing.decision === 'pending' ? 'include' : existing.decision, existing.id);
+        if (!AUTO_QTY.includes(feature) && feature !== 'DESIGN_LEVEL' && existing.source_kind !== 'client' && !(await touchedBySale(existing.id))) {
+          if (ev.best === 'observed' && existing.decision === 'pending') await run("UPDATE requirements SET decision='include', source_kind='observed' WHERE id=?", existing.id);
+          else if (ev.best !== 'observed' && existing.decision === 'include' && existing.source_kind === 'observed') await run("UPDATE requirements SET decision='pending', source_kind='inferred' WHERE id=?", existing.id);
+        }
         continue;
       }
       const code = await nextCode('requirements', job.project_id, 'R');
@@ -286,6 +300,12 @@ export async function ingest(job, res) {
         job.project_id, code, feature, f.title, ev.best === 'observed' ? 'observed' : 'inferred', JSON.stringify(ev.codes), autoInclude ? 'include' : 'pending', qty, f.unit);
       for (const q of f.questions || []) {
         await run('INSERT INTO questions (project_id, code, requirement_id, text, blocking) VALUES (?,?,?,?,?)', job.project_id, await nextCode('questions', job.project_id, 'Q'), Number(r.lastInsertRowid), q.text, q.blocking ? 1 : 0);
+      }
+    }
+    if (res.ok) {
+      for (const r of await all("SELECT id, feature FROM requirements WHERE project_id=? AND decision='include' AND source_kind='observed' AND feature IS NOT NULL", job.project_id)) {
+        if (featureEv[r.feature] || AUTO_QTY.includes(r.feature) || r.feature === 'DESIGN_LEVEL' || await touchedBySale(r.id)) continue;
+        await run("UPDATE requirements SET decision='pending', source_kind='inferred' WHERE id=?", r.id);
       }
     }
     if (complexity || res.ok) {

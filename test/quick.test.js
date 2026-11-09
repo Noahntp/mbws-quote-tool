@@ -236,3 +236,27 @@ test('bộ quét Việt Nam: báo còn sống trong 1 phút thì Vercel nhườn
   assert.equal(w.alive, false);
   await run("DELETE FROM app_kv WHERE key='scan_worker'");
 });
+
+test('quét lại: tính năng máy tick nhầm ở lần trước được bỏ tick, giá gốc theo lần quét mới; tính năng sale tự tick thì giữ', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['quet-lai.vn'] });
+  const run1 = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", run1);
+  const page = (feats) => ({ ok: true, input: 'https://quet-lai.vn/', sitemap: {}, coverage: { discovered: 5 }, templates: [{ template: 'home', kind: 'home', url_count: 1 }],
+    pages: [{ url: 'https://quet-lai.vn/', template: 'home', captured_at: new Date().toISOString(), features: feats.map((f) => ({ feature: f, detail: f, verification: 'observed' })) }] });
+  await ingest({ id: run1, project_id: id, url: 'https://quet-lai.vn/' }, page(['CART', 'LANDING', 'SEARCH']));
+  let reqs = (await api(`/api/projects/${id}`)).json.requirements;
+  const dec = (f) => reqs.find((r) => r.feature === f)?.decision;
+  assert.equal(dec('CART'), 'include'); assert.equal(dec('LANDING'), 'include');
+  // sale tự giữ LANDING (bấm chọn) → lần quét sau không đổi
+  await api(`/api/projects/${id}/quick-feature`, 'POST', { feature: 'LANDING', include: true });
+  // lượt quét mới (bộ quét đã sửa): không còn thấy giỏ hàng và landing
+  await run("INSERT INTO analysis_runs (project_id, url, status) VALUES (?, 'https://quet-lai.vn/', 'running')", id);
+  const run2 = Number((await one('SELECT MAX(id) AS id FROM analysis_runs WHERE project_id=?', id)).id);
+  await ingest({ id: run2, project_id: id, url: 'https://quet-lai.vn/' }, page(['SEARCH']));
+  reqs = (await api(`/api/projects/${id}`)).json.requirements;
+  assert.equal(dec('CART'), 'pending', 'giỏ hàng tick nhầm phải về chờ xác nhận');
+  assert.equal(dec('LANDING'), 'include', 'mục sale đã tự chọn phải giữ');
+  assert.equal(dec('SEARCH'), 'include');
+  const q = (await api(`/api/projects/${id}/quick`)).json;
+  assert.ok(!('CART' in q.baseline.features), 'giá gốc không còn tính giỏ hàng của lần quét cũ');
+});
