@@ -64,9 +64,16 @@ const finish = (ok, fatal) => {
 };
 fs.mkdirSync(cfg.assetDir, { recursive: true });
 
-  const start = normalizeInput(cfg.url);
+  let start = normalizeInput(cfg.url);
   if (!start) return finish(false, 'URL không hợp lệ');
-  try { await assertPublicUrl(start); } catch (e) { return finish(false, e.message); }
+  try { await assertPublicUrl(start); } catch (e) {
+    // Tên miền gốc không có địa chỉ (nhiều web chỉ chạy ở www.) → thử www. trước khi báo lỗi
+    const u0 = new URL(start);
+    if (!e.dns || e.transient || u0.hostname.startsWith('www.')) return finish(false, e.message);
+    const alt = new URL(start); alt.hostname = 'www.' + u0.hostname;
+    try { await assertPublicUrl(alt.toString()); start = alt.toString(); log('tên miền gốc không có địa chỉ → quét', start); }
+    catch { return finish(false, `${e.message} Đã thử cả www.${u0.hostname} cũng không được. Kiểm tra lại tên miền với khách, hoặc tick tính năng tay ở mục 2.`); }
+  }
   const root = new URL(start);
   const rootHost = root.hostname;
 

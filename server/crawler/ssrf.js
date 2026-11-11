@@ -37,20 +37,45 @@ export function isPublicIp(ip) {
   return false;
 }
 
+// Bộ nhớ đệm tra tên miền có hạn 10 phút (bộ quét chạy lâu ngày không giữ kết quả cũ); lỗi tra DNS không lưu.
 const cache = new Map();
+const CACHE_MS = 10 * 60 * 1000;
+const DNS_TRANSIENT = new Set(['EBUSY', 'EAI_AGAIN', 'ETIMEOUT', 'ESERVFAIL', 'ECONNREFUSED', 'EAI_FAIL']);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Tra tên miền → IP. Máy chủ DNS bận (EBUSY, EAI_AGAIN…) thì thử lại; getaddrinfo lỗi thì hỏi thẳng DNS (resolve4/6). */
+async function lookupAll(h) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { return (await dns.lookup(h, { all: true, verbatim: true })).map((a) => a.address); } catch (e) {
+      last = e;
+      if (!DNS_TRANSIENT.has(e.code)) break;
+      await sleep(700 * (i + 1));
+    }
+  }
+  const [a4, a6] = await Promise.all([dns.resolve4(h).catch(() => []), dns.resolve6(h).catch(() => [])]);
+  if (a4.length || a6.length) return [...a4, ...a6];
+  const err = new Error(DNS_TRANSIENT.has(last?.code)
+    ? `Máy chủ DNS không trả lời khi tra tên miền ${h} (${last.code}) — lỗi mạng tạm thời, bấm "Quét lại" sau ít phút.`
+    : `Không tìm thấy địa chỉ của tên miền ${h}${last?.code ? ` (${last.code})` : ''}: tên miền chưa trỏ về máy chủ nào hoặc web đã ngừng hoạt động.`);
+  err.dns = true; err.transient = DNS_TRANSIENT.has(last?.code);
+  throw err;
+}
+
 /** Phân giải host và bảo đảm MỌI địa chỉ trả về đều là IP công khai. */
 export async function assertPublicHost(hostname) {
   const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (cache.has(h)) { const c = cache.get(h); if (c.ok) return c.addrs; throw new Error(c.err); }
+  const c = cache.get(h);
+  if (c && Date.now() - c.at < CACHE_MS) { if (c.ok) return c.addrs; throw new Error(c.err); }
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') || h === 'metadata.google.internal') {
-    cache.set(h, { ok: false, err: `Host bị chặn: ${h}` }); throw new Error(`Host bị chặn: ${h}`);
+    cache.set(h, { ok: false, err: `Host bị chặn: ${h}`, at: Date.now() }); throw new Error(`Host bị chặn: ${h}`);
   }
   let addrs;
   if (net.isIP(h)) addrs = [h];
-  else addrs = (await dns.lookup(h, { all: true, verbatim: true })).map((a) => a.address);
+  else addrs = await lookupAll(h); // lỗi tra DNS ném ra ngay, không lưu đệm
   const bad = addrs.find((a) => !isPublicIp(a));
-  if (!addrs.length || bad) { const err = `Đích không phải IP công khai (${h} → ${bad || 'không phân giải được'})`; cache.set(h, { ok: false, err }); throw new Error(err); }
-  cache.set(h, { ok: true, addrs });
+  if (!addrs.length || bad) { const err = `Đích không phải IP công khai (${h} → ${bad || 'không phân giải được'})`; cache.set(h, { ok: false, err, at: Date.now() }); throw new Error(err); }
+  cache.set(h, { ok: true, addrs, at: Date.now() });
   return addrs;
 }
 
