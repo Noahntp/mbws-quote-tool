@@ -298,3 +298,24 @@ test('dọn ảnh: quét lại tự xóa ảnh lượt cũ cùng web mẫu; tran
   assert.ok(r.removed >= 1);
   assert.equal(Number((await one('SELECT COUNT(*) AS n FROM assets WHERE path LIKE ?', `runs/${run3}/%`)).n), 0);
 });
+
+test('robots.txt chặn trang con: vẫn ước số mẫu trang / dịch vụ / bài viết theo liên kết thấy trên trang chủ (WordPress: slug dài là bài viết)', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['demo-wp.vn'] });
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId);
+  const B = 'https://demo-wp.vn';
+  const posts = ['/7-nen-tang-truyen-thong-xa-hoi-moi-ma-ban-khong-biet', '/giup-cong-ty-chuyen-sang-van-hoa-ky-thuat-so', '/nhung-dieu-can-biet-ve-tuong-lai-lam-viec-tu-xa'].map((x) => B + x);
+  const services = ['/dich-vu/quan-ly-tai-chinh', '/dich-vu/tu-van-thue'].map((x) => B + x);
+  await ingest({ id: runId, project_id: id, url: B + '/' }, {
+    ok: true, input: B + '/', generator: 'WordPress', robots: { status: 'found', disallowed: 6 }, discovered: [], robots_seen: [...posts, ...services, B + '/gioi-thieu'],
+    sitemap: { status: 'not_found' }, coverage: { discovered: 6 },
+    templates: [{ template: 'home', kind: 'home', url_count: 1, examples: [B + '/'] }, { template: 'other:d1', kind: 'other', url_count: 3, examples: posts },
+      { template: 'service:detail', kind: 'service', url_count: 2, examples: services }, { template: 'about', kind: 'about', url_count: 1, examples: [B + '/gioi-thieu'] }],
+    pages: [{ url: B + '/', template: 'home', captured_at: new Date().toISOString(), features: [] }],
+  });
+  const p = (await api(`/api/projects/${id}`)).json;
+  const qty = (f) => p.requirements.find((r) => r.feature === f)?.quantity;
+  assert.equal(qty('DATA_POSTS'), 3);
+  assert.equal(qty('DATA_PRODUCTS'), 2); // dịch vụ tính chung SP/DV
+  assert.ok(p.evidence.some((e) => e.kind === 'note' && /robots\.txt/.test(e.detail)), 'phải ghi chú cho sale vì sao chỉ ước lượng');
+});

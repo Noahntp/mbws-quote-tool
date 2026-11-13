@@ -91,13 +91,19 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   const addUrl = (raw, base) => {
     const u = normalizeUrl(raw, base);
     if (!u || !sameSite(u, rootHost) || !isHtmlCandidate(u) || classify(u).kind === 'junk') return; // bỏ đường dẫn rác của CMS cũ
-    if (!robotsAllows(robots, u)) { result.robots.disallowed = (result.robots.disallowed || 0) + 1; return; }
+    if (!robotsAllows(robots, u)) {
+      result.robots.disallowed = (result.robots.disallowed || 0) + 1;
+      const kb = dedupeKey(u).replace(/^(https?:\/\/)www\./, '$1');
+      if (robotsSeen.size < 2000) robotsSeen.set(kb, dedupeKey(u));
+      return;
+    }
     const k = dedupeKey(u);
     const key = k.replace(/^(https?:\/\/)www\./, '$1'); // www.x.vn và x.vn là một trang
     if (!discovered.has(key) && discovered.size < 5000) discovered.set(key, k);
     return discovered.get(key);
   };
   const sitemapOf = new Map(); // URL → tên file sitemap chứa nó
+  const robotsSeen = new Map(); // liên kết thấy trên trang đã đọc nhưng robots.txt không cho máy quét vào — chỉ dùng để đếm
 
   log('robots', result.robots.status);
   // sitemap
@@ -296,7 +302,10 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   }
   log('done', visited.size);
   result.discovered = [...discovered.values()];
-  const groupsFinal = groupTemplates(result.discovered);
+  // đếm mẫu trang / sản phẩm / bài viết gồm cả liên kết robots.txt cấm vào (thấy trên trang đã đọc, không truy cập)
+  const seenOnly = [...robotsSeen.entries()].filter(([k]) => !discovered.has(k)).map(([, u]) => u);
+  result.robots_seen = seenOnly;
+  const groupsFinal = groupTemplates([...result.discovered, ...seenOnly]);
   result.templates = groupsFinal.map((g) => {
     const sampled = result.pages.filter((p) => !p.error && classify(p.url).template === g.template);
     const kinds = sampled.map((p) => p.page_kind).filter(Boolean);
@@ -311,8 +320,9 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   result.sitemap.product_urls = smCount(/product|san-?pham|sanpham/);
   result.sitemap.post_urls = smCount(/post|bai-?viet|tin-?tuc|news|blog|article/);
   result.coverage = {
-    discovered: result.discovered.length,
-    estimated_urls: Math.max(result.discovered.length, result.sitemap?.estimated_urls || 0),
+    discovered: result.discovered.length + seenOnly.length,
+    robots_seen_only: seenOnly.length,
+    estimated_urls: Math.max(result.discovered.length + seenOnly.length, result.sitemap?.estimated_urls || 0),
     read: result.pages.filter((p) => !p.error && !p.blocked).length,
     failed: result.pages.filter((p) => p.error || p.blocked).length,
     template_groups: groupsFinal.length,

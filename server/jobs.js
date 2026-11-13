@@ -250,7 +250,11 @@ export async function ingest(job, res) {
     const tpl = res.templates || [];
     // nhóm URL "phẳng" (không có chữ san-pham trong đường dẫn) nhưng nội dung là trang sản phẩm → coi là chi tiết sản phẩm
     // nhóm "khác" khác độ sâu đường dẫn là các loại trang khác nhau (vd /doi-tac và /doi-tac/sieu-thi) → đếm riêng
-    const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : t.template);
+    // WordPress đặt bài viết ở đường dẫn phẳng /ten-bai-viet-dai (mặc định /%postname%/) → nhóm "other:d1" toàn slug dài là bài viết
+    const isWp = /wordpress/i.test(res.generator || '');
+    const wpPostSlug = (u) => { try { const pth = new URL(u).pathname.replace(/\/$/, ''); return /^\/[^/.]+$/.test(pth) && (pth.match(/-/g) || []).length >= 4; } catch { return false; } };
+    const wpPostGroup = (t) => isWp && t.template === 'other:d1' && (t.examples || []).length > 0 && (t.examples || []).filter(wpPostSlug).length * 2 >= (t.examples || []).length;
+    const tplKey = (t) => (t.detected === 'product_detail' ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : wpPostGroup(t) ? 'blog:detail' : t.template);
     // trang lẻ không rõ loại (nhóm "other" chỉ 1 URL) dùng chung mẫu trang nội dung → không tính thành mẫu trang riêng
     const oneOff = (t) => t.kind === 'other' && !t.detected && (t.url_count || 0) < 2;
     const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart', 'junk'].includes(t.kind) && !oneOff(t)).map(tplKey));
@@ -270,7 +274,8 @@ export async function ingest(job, res) {
     const locales = Object.keys(locCount).filter((l) => locCount[l] >= 2);
     const mainLoc = locales.length >= 2 ? locales.sort((a, b) => locCount[b] - locCount[a])[0] : null;
     const perLang = (urls) => (mainLoc ? urls.filter((u) => locOf(u) === mainLoc) : urls).length;
-    const urlsOf = (t) => (res.discovered || []).filter((u) => classify(u).template === t.template);
+    const urlsOf = (t) => [...(res.discovered || []), ...(res.robots_seen || [])].filter((u) => classify(u).template === t.template);
+    if (res.robots_seen?.length && (res.robots?.disallowed || 0) > 0) await addEv({ url: res.input, kind: 'note', detail: `robots.txt của web mẫu không cho máy quét đọc trang con (${res.robots_seen.length} liên kết) — chỉ đọc trang được phép; số mẫu trang / sản phẩm / bài viết ước theo liên kết thấy trên các trang đó (ít nhất), sale kiểm tra lại.`, verification: 'unverified' });
     if (res.static_mode) await addEv({ url: res.input, kind: 'note', detail: `Web mẫu ${res.static_mode.reason} khi chạy JavaScript — đã quét bản HTML tĩnh. Tính năng chỉ hiện khi chạy JavaScript (chat, bộ lọc động…) có thể thiếu: sale kiểm tra lại mục 2.`, verification: 'unverified' });
     if (featureEv.PRODUCT_CATALOG && featureEv.PRODUCT_CATALOG.best !== 'observed' && tpl.some((t) => tplKey(t) === 'product:detail' && t.url_count >= 3)) {
       const n = tpl.filter((t) => tplKey(t) === 'product:detail').reduce((x, t) => x + t.url_count, 0);
@@ -278,7 +283,7 @@ export async function ingest(job, res) {
       featureEv.PRODUCT_CATALOG.codes.push(code); featureEv.PRODUCT_CATALOG.best = 'observed';
     }
     const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (mainLoc ? perLang(urlsOf(t)) : (t.url_count || 0)), 0);
-    const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail');
+    const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail' || t.template === 'service:detail'); // gói matbao.ws tính chung sản phẩm / dịch vụ (SP/DV)
     const listMax = (re) => Math.max(0, ...(res.pages || []).filter((p) => !p.error && !p.blocked && (re.test(p.template || '') || re.test(classify(p.url).template))).map((p) => p.list_items?.count || 0));
     const prodByList = listMax(/^(product|service):list$/);
     const prodBySitemap = Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1));
@@ -288,7 +293,8 @@ export async function ingest(job, res) {
       const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prodCount;
     }
-    const postByUrl = Math.max(sumUrls((t) => t.template === 'blog:detail'), Math.round((res.sitemap?.post_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
+    const wpPosts = isWp ? [...(res.discovered || []), ...(res.robots_seen || [])].filter((u) => classify(u).template === 'other:d1' && wpPostSlug(u)).length : 0;
+    const postByUrl = Math.max(sumUrls((t) => t.template === 'blog:detail'), wpPosts, Math.round((res.sitemap?.post_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
     const postByList = listMax(/^blog:list$/);
     const postCount = Math.max(postByUrl, postByList);
     if (postCount) {
