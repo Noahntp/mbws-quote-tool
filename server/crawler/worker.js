@@ -272,7 +272,11 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     else if (denied) homeFail = `Web mẫu từ chối máy quét (${home.error}: tường lửa của web chặn công cụ tự động — quét từ máy khác cũng bị). Tick tính năng tay ở mục 2, hoặc nhờ quản trị web cho phép "MBWS-QuoteBot".`;
     else if (netBlock) homeFail = `Web mẫu từ chối kết nối từ máy chủ quét (${(home.error_raw || home.error).match(NET_BLOCK)?.[0] || 'mất kết nối'}) — thường do web chặn IP máy chủ đám mây / nước ngoài. Quét bằng bản chạy trên máy (mạng Việt Nam), hoặc tick tính năng tay.`;
     else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}. Web mẫu quá nặng cho máy chủ đám mây — quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
-    if (homeFail) return finish(false, homeFail);
+    if (homeFail) {
+      // loại chặn có thể do IP máy quét (nước ngoài / máy chủ đám mây) → bên gọi có thể chuyển cho bộ quét đặt tại Việt Nam
+      result.block_kind = netBlock ? 'net' : denied ? 'denied' : home?.blocked ? 'wall' : null;
+      return finish(false, homeFail);
+    }
     // mở rộng khám phá qua một số trang menu khác loại
     const firstGroups = groupTemplates([...discovered.values()]).filter((g) => g.template !== 'home');
     for (const g of sampleUrls(firstGroups, Math.min(5, MAX_URLS - 1), 1)) {

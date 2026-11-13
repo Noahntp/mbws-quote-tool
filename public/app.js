@@ -151,9 +151,10 @@ async function openProject(id, keepScroll, fromPoll) {
   renderProject();
   restoreUi(ui);
   if (keepScroll) window.scrollTo(0, y);
-  const running = S.project.runs.some((r) => r.status === 'queued' || r.status === 'running');
+  const active = S.project.runs.filter((r) => r.status === 'queued' || r.status === 'running');
+  const waitingVn = active.length && active.every((r) => /^Chờ bộ quét Việt Nam/.test(r.error || '')); // có thể chờ lâu → kiểm tra thưa hơn
   clearInterval(S.poll);
-  if (running) S.poll = setInterval(() => openProject(id, true, true), 4000);
+  if (active.length) S.poll = setInterval(() => openProject(id, true, true), waitingVn ? 30000 : 4000);
 }
 const reload = () => openProject(S.project.project.id, true);
 
@@ -285,7 +286,8 @@ function renderQuick() {
         <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
         <label class="f">Ngân sách của khách<input data-qinfo="budget" inputmode="decimal" value="${p.budget ? esc(Number(p.budget).toLocaleString('vi-VN')) : ''}" placeholder="vd: 10tr hoặc 10.000.000"></label>
       </div>
-      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
+      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : /^Chờ bộ quét Việt Nam/.test(ru.error || '') && ru.status === 'queued' ? `<span title="${esc(ru.error)}">${chip('chờ bộ quét Việt Nam — web chặn máy chủ nước ngoài', 'warn')}</span>`
+          : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
         <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div>
         ${scannerHtml()}</div>
       ${measureTableHtml(S.quick)}

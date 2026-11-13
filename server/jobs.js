@@ -35,6 +35,12 @@ export async function startJobLoop() {
 
 // Bộ quét riêng (server/scan-worker.js, chạy trên máy ở Việt Nam) báo "còn sống" mỗi 20 giây vào app_kv.
 const WORKER_FRESH_MS = 60000;
+const WORKER_KNOWN_MS = 30 * 24 * 3600 * 1000; // có bộ quét Việt Nam chạy trong 30 ngày gần đây → đáng chờ nó
+export async function scanWorkerKnown() {
+  const r = await one("SELECT updated_at FROM app_kv WHERE key IN ('scan_worker','scan_worker_seen') ORDER BY updated_at DESC LIMIT 1");
+  const at = r ? Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z') : NaN;
+  return Number.isFinite(at) && Date.now() - at < WORKER_KNOWN_MS;
+}
 export async function scanWorkerStatus() {
   const r = await one("SELECT value, updated_at FROM app_kv WHERE key='scan_worker'");
   if (!r) return null;
@@ -68,7 +74,8 @@ export async function processNext() {
   try {
     // job "running" quá lâu (hàm bị dừng giữa chừng) → trả lại hàng đợi
     await run("UPDATE job_queue SET status='queued', locked_at=NULL WHERE status='running' AND locked_at < ?", utcMinus(STALE_MINUTES));
-    job = await one("SELECT run_id FROM job_queue WHERE status='queued' ORDER BY run_id LIMIT 1");
+    const vnOnly = IS_SERVERLESS && !process.env.SCAN_WORKER ? " AND route <> 'vn'" : ''; // lượt chờ bộ quét Việt Nam: Vercel không nhận
+    job = await one(`SELECT run_id FROM job_queue WHERE status='queued'${vnOnly} ORDER BY run_id LIMIT 1`);
     const claimed = job && await run("UPDATE job_queue SET status='running', locked_at=datetime('now'), attempts=attempts+1 WHERE run_id=? AND status='queued'", job.run_id);
     if (!job || !claimed.changes) { busy = false; return false; } // không có việc / tiến trình khác đã nhận
     await run("UPDATE analysis_runs SET status='running', started_at=datetime('now'), attempts=attempts+1, locked_at=datetime('now') WHERE id=?", job.run_id);
@@ -79,6 +86,13 @@ export async function processNext() {
     const r = await one('SELECT * FROM analysis_runs WHERE id=?', job.run_id);
     console.log(`[quét] bắt đầu #${r.id} ${r.url}`);
     const result = await executeRun(r);
+    if (!result.ok && result.block_kind && IS_SERVERLESS && !process.env.SCAN_WORKER && (await scanWorkerKnown())) {
+      const why = `Chờ bộ quét Việt Nam: máy chủ Vercel (Mỹ) bị web chặn — ${String(result.fatal || '').slice(0, 160)}`;
+      await run("UPDATE job_queue SET status='queued', route='vn', locked_at=NULL WHERE run_id=?", job.run_id);
+      await run("UPDATE analysis_runs SET status='queued', error=?, locked_at=NULL, finished_at=NULL WHERE id=?", why, job.run_id);
+      console.log(`[quét] #${r.id} bị chặn trên Vercel (${result.block_kind}) → chờ bộ quét Việt Nam`);
+      return true;
+    }
     const h0 = result.pages?.[0];
     console.log(`[quét] xong #${r.id}: ${result.ok ? 'ok' : 'lỗi ' + (result.fatal || '')}, ${(result.pages || []).length} trang, ${(result.discovered || []).length} URL, ${Math.round((Date.now() - t0) / 1000)}s${h0 ? ` | trang chủ: ${h0.status ?? '-'} "${(h0.title || '').slice(0, 60)}" ${h0.final_url || ''}${h0.blocked ? ' [chặn: ' + h0.blocked + ']' : ''}` : ''}`);
     await ingest(r, result);

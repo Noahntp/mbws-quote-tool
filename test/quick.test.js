@@ -260,3 +260,15 @@ test('quét lại: tính năng máy tick nhầm ở lần trước được bỏ
   const q = (await api(`/api/projects/${id}/quick`)).json;
   assert.ok(!('CART' in q.baseline.features), 'giá gốc không còn tính giỏ hàng của lần quét cũ');
 });
+
+test('hàng đợi có cột route; biết đã từng có bộ quét Việt Nam (30 ngày) để chuyển lượt bị chặn IP sang chờ nó', async () => {
+  const { scanWorkerKnown } = await import('../server/jobs.js');
+  assert.ok(await one("SELECT route FROM job_queue LIMIT 1") !== null || true); // cột route tồn tại (truy vấn không lỗi)
+  await run("DELETE FROM app_kv WHERE key IN ('scan_worker','scan_worker_seen')");
+  assert.equal(await scanWorkerKnown(), false);
+  await run("INSERT INTO app_kv (key, value, updated_at) VALUES ('scan_worker_seen', '{}', datetime('now'))");
+  assert.equal(await scanWorkerKnown(), true);
+  await run("UPDATE app_kv SET updated_at='2020-01-01 00:00:00' WHERE key='scan_worker_seen'");
+  assert.equal(await scanWorkerKnown(), false);
+  await run("DELETE FROM app_kv WHERE key='scan_worker_seen'");
+});

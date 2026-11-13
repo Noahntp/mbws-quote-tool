@@ -252,6 +252,10 @@ export function ready() {
     if (DRIVER === 'pg') { c = await driver.begin(); await c.query('SELECT pg_advisory_xact_lock(727201)'); }
     try {
     if (c) { await c.query(PG_PRELUDE); await c.query(pgSchema(SCHEMA)); } else if (IS_PG) { await driver.exec(PG_PRELUDE); await driver.exec(pgSchema(SCHEMA)); } else await driver.exec(SCHEMA);
+    // nâng cấp bảng cũ: cột route của hàng đợi quét ('any' | 'vn' = chờ bộ quét Việt Nam)
+    if (c) await c.query("ALTER TABLE job_queue ADD COLUMN IF NOT EXISTS route TEXT NOT NULL DEFAULT 'any'");
+    else if (IS_PG) await driver.exec("ALTER TABLE job_queue ADD COLUMN IF NOT EXISTS route TEXT NOT NULL DEFAULT 'any'");
+    else { try { await driver.exec("ALTER TABLE job_queue ADD COLUMN route TEXT NOT NULL DEFAULT 'any'"); } catch { /* đã có cột */ } }
     const q1 = async (sql, ...a) => (await driver.query(sql, a, c || undefined)).rows[0];
     const r1 = async (sql, ...a) => driver.query(sql, a, c || undefined);
     if (!Number((await q1('SELECT COUNT(*) n FROM users')).n)) {
