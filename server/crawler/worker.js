@@ -206,6 +206,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       const d = await p.evaluate(detectInPage);
       page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind; page.metrics = d.metrics;
       page.layout = await p.evaluate(layoutSignatureInPage).catch(() => null);
+      page.list_items = d.list_items; // số mục bài viết / sản phẩm / dịch vụ hiện trên trang (trang danh sách)
       if (!page.blocked) page.features = d.features;
       if (d.generator && !result.generator) result.generator = d.generator;
       page.links_count = d.links.length;

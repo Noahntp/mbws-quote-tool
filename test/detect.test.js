@@ -147,3 +147,11 @@ test('web B2B: nút class giỏ hàng nhưng chữ "Liên hệ báo giá sỉ" k
   const { f: f2 } = await detect(`<script src="https://w.ladicdn.com/v2/source/ladipage.min.js"></script><h1>Ưu đãi tháng 11</h1>`, 'https://brand.test/');
   observed(f2, 'LANDING');
 });
+
+test('đếm số mục bài viết / dịch vụ hiện trên trang danh sách (web nền tảng: mọi thẻ trỏ chung 1 trang chi tiết)', async () => {
+  const card = (t) => `<div class="card post"><img src="a.jpg"><h3>${t}</h3><a href="chi-tiet-tin-tuc.html">Xem thêm</a></div>`;
+  const { d } = await detect(`<header><nav><ul><li><h3>Menu một</h3></li><li><h3>Menu hai</h3></li><li><h3>Menu ba</h3></li></ul></nav></header>
+    <h2>Tất cả bài viết</h2><div class="grid">${['Thủ tục thành lập công ty TNHH', 'Quyết toán thuế cuối năm', 'Nhà đầu tư nước ngoài góp vốn', 'Đăng ký nhãn hiệu sớm', 'Tăng vốn điều lệ: hồ sơ'].map(card).join('')}</div>`, 'https://site.test/tin-tuc.html');
+  assert.equal(d.list_items.count, 5); // không đếm menu đầu trang
+  assert.match(d.list_items.titles[0], /thành lập công ty/);
+});

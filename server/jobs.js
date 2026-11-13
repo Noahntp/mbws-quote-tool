@@ -252,15 +252,20 @@ export async function ingest(job, res) {
     }
     const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (mainLoc ? perLang(urlsOf(t)) : (t.url_count || 0)), 0);
     const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail');
-    const prodCount = Math.max(prodByTpl, Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
+    const listMax = (re) => Math.max(0, ...(res.pages || []).filter((p) => !p.error && !p.blocked && (re.test(p.template || '') || re.test(classify(p.url).template))).map((p) => p.list_items?.count || 0));
+    const prodByList = listMax(/^(product|service):list$/);
+    const prodBySitemap = Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1));
+    const prodCount = Math.max(prodByTpl, prodBySitemap, prodByList);
     if (prodCount) {
-      const how = (res.sitemap?.product_urls || 0) >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
+      const how = prodCount === prodByList && prodByList > Math.max(prodByTpl, prodBySitemap) ? 'số sản phẩm / dịch vụ hiện trên trang danh sách — ít nhất' : prodBySitemap >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
       const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prodCount;
     }
-    const postCount = Math.max(sumUrls((t) => t.template === 'blog:detail'), Math.round((res.sitemap?.post_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
+    const postByUrl = Math.max(sumUrls((t) => t.template === 'blog:detail'), Math.round((res.sitemap?.post_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1)));
+    const postByList = listMax(/^blog:list$/);
+    const postCount = Math.max(postByUrl, postByList);
     if (postCount) {
-      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
+      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu${postByList > postByUrl ? ' (theo số bài hiện trên trang tin tức — ít nhất)' : ''} — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_POSTS = { codes: [code], best: 'inferred' }; quantities.DATA_POSTS = postCount;
     }
     // Dự đoán dung lượng lưu trữ theo khối lượng web mẫu (công thức công khai ở volume.js)

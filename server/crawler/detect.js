@@ -209,6 +209,26 @@ export function detectInPage() {
     price_count: priceMatches.length,
     product_schema: productSchema,
     page_kind: pageKind,
+    list_items: (() => {
+      let best = { count: 0, titles: [] };
+      const sig = (x) => x.tagName + '.' + [...x.classList].sort().join('.');
+      const done = new Set();
+      for (const h of qa('h2, h3, h4').filter(shown)) {
+        let el = h;
+        for (let i = 0; i < 6 && el && el.parentElement; i++, el = el.parentElement) {
+          const par = el.parentElement;
+          if (done.has(par) || par.closest('header, nav, footer, aside, [class*="menu" i]')) break;
+          const same = [...par.children].filter((c) => sig(c) === sig(el) && c.querySelector('h2, h3, h4'));
+          if (same.length >= 3) {
+            done.add(par);
+            const titles = [...new Set(same.map((c) => (c.querySelector('h2, h3, h4')?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 90)).filter((t) => t.length > 6))];
+            if (titles.length > best.count) best = { count: titles.length, titles: titles.slice(0, 5) };
+            break;
+          }
+        }
+      }
+      return best;
+    })(),
     metrics,
     features: out,
   };

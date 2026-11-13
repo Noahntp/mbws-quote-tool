@@ -220,7 +220,7 @@ function packageCapacity(code) {
   const hosting = gb(x.p.hosting) != null ? `${gb(x.p.hosting)} GB` : `~${maxGb} GB (theo dự án)`;
   return { pages, products: x.p.products, posts: x.p.posts, hosting, hosting_short: hosting.replace(/ \(theo dự án\)/, ''), sitemap: x.p.features?.[crit?.no] };
 }
-const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm cần nhập'], ['DATA_POSTS', 'Số bài viết cần nhập'], ['HOSTING_STORAGE', 'Dung lượng hosting (GB)']];
+const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm / dịch vụ'], ['DATA_POSTS', 'Số bài viết cần nhập'], ['HOSTING_STORAGE', 'Dung lượng hosting (GB)']];
 
 function renderQuick() {
   const P = S.project; const p = P.project; const r = P.preview; const cat = S.meta.catalog;
@@ -349,7 +349,7 @@ function scannerHtml() {
 function volumesHtml(V) {
   if (!V) return '';
   const st = V.storage;
-  return `<p class="small muted" style="margin:6px 0 0">Tự điền từ web mẫu: ${num(V.urls, 0)} trang (${num(V.templates || 0, 0)} mẫu trang) · ~${num(V.products, 0)} sản phẩm · ~${num(V.posts, 0)} bài viết${st ? ` · dự đoán <b>${num(st.gb, 1)} GB</b> lưu trữ <span title="${esc(st.how)}" style="cursor:help;text-decoration:underline dotted">(cách tính)</span>` : ''}. Sửa ô nào thì giữ số đã sửa khi quét lại.</p>`;
+  return `<p class="small muted" style="margin:6px 0 0">Tự điền từ web mẫu: ${num(V.urls, 0)} trang (${num(V.templates || 0, 0)} mẫu trang) · ~${num(V.products, 0)} sản phẩm/dịch vụ · ~${num(V.posts, 0)} bài viết${st ? ` · dự đoán <b>${num(st.gb, 1)} GB</b> lưu trữ <span title="${esc(st.how)}" style="cursor:help;text-decoration:underline dotted">(cách tính)</span>` : ''}. Sửa ô nào thì giữ số đã sửa khi quét lại.</p>`;
 }
 // So với ngân sách khách (giá đã gồm VAT): trong / vượt, gợi ý phương án vừa túi tiền
 function budgetHtml(P, r) {
