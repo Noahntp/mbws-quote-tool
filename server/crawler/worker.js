@@ -41,6 +41,7 @@ export function botWall({ url = '', title = '', text = '', marker = false }) {
 export async function runSurvey(cfg, opts = {}) {
 const MAX_URLS = Math.min(Math.max(Number(cfg.maxUrls) || 20, 1), 40);
 const SHOT_MAX_H = Math.min(Math.max(Number(cfg.shotMaxHeight) || 6000, 900), 8000);
+const SHOT_Q = Math.min(Math.max(Number(cfg.shotQuality) || 55, 30), 80);
 const BUDGET_MS = Math.min(Number(cfg.budgetMs) || 240000, 600000);
 // Chế độ nhẹ (Vercel/Lambda: Chromium một tiến trình, ít bộ nhớ): không tải ảnh/phông, cuộn ít, bỏ ảnh mobile
 const LIGHT = cfg.light ?? IS_SERVERLESS;
@@ -215,14 +216,14 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       const n = String(++shot).padStart(3, '0');
       const dFile = path.join(cfg.assetDir, `${n}-desktop.jpg`);
       const height = await p.evaluate((maxH) => Math.min(document.documentElement.scrollHeight, maxH), SHOT_MAX_H);
-      const bufD = await p.screenshot({ type: 'jpeg', quality: 55, clip: { x: 0, y: 0, width: 1366, height: Math.max(height, 900) }, fullPage: true, timeout: 15000 });
+      const bufD = await p.screenshot({ type: 'jpeg', quality: SHOT_Q, clip: { x: 0, y: 0, width: 1366, height: Math.max(height, 900) }, fullPage: true, timeout: 15000 });
       fs.writeFileSync(dFile, bufD);
       page.desktop = { file: path.basename(dFile), hash: sha256(bufD), viewport: '1366x900' };
       const pm = mobile ? await mobile.newPage() : null;
       if (pm) try {
         await pm.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         await pm.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
-        const bufM = await pm.screenshot({ type: 'jpeg', quality: 55, timeout: 15000 });
+        const bufM = await pm.screenshot({ type: 'jpeg', quality: SHOT_Q, timeout: 15000 });
         const mFile = path.join(cfg.assetDir, `${n}-mobile.jpg`);
         fs.writeFileSync(mFile, bufM);
         page.mobile = { file: path.basename(mFile), hash: sha256(bufM), viewport: '390x844' };

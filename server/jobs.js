@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { waitUntil } from '@vercel/functions';
-import { one, all, run, tx, audit, DATA_DIR, ROOT, loadJson, IS_SERVERLESS } from './db.js';
+import { one, all, run, tx, audit, DATA_DIR, ROOT, loadJson, IS_SERVERLESS, IS_PG } from './db.js';
 import { assessComplexity, measureFromScan } from './complexity.js';
 import { estimateStorage } from './volume.js';
 import { classify } from './crawler/urls.js';
@@ -115,7 +115,8 @@ async function executeRun(job) {
   fs.mkdirSync(dir, { recursive: true });
   const cfg = {
     url: job.url, maxUrls: IS_SERVERLESS ? Math.min(job.max_urls, 10) : job.max_urls, budgetMs: BUDGET_MS,
-    assetDir: dir, outFile: path.join(dir, 'result.json'), shotMaxHeight: IS_SERVERLESS ? 2500 : 6000,
+    // ảnh lưu vào CSDL dùng chung (Vercel, bộ quét Việt Nam, Postgres) → giới hạn chiều cao để không đầy dung lượng
+    assetDir: dir, outFile: path.join(dir, 'result.json'), shotMaxHeight: IS_SERVERLESS ? 2500 : IS_PG || process.env.SCAN_WORKER ? 3000 : 6000, shotQuality: IS_PG || IS_SERVERLESS ? 45 : 55,
   };
   if (IS_SERVERLESS || process.env.CRAWLER_IN_PROCESS === '1') {
     const { runSurvey } = await import('./crawler/worker.js');
@@ -179,6 +180,32 @@ export async function captureBaseline(projectId, url, force = false) {
 }
 
 // Lưu ảnh chụp vào CSDL (để xem lại được trên máy chủ không có ổ đĩa cố định)
+/** Xóa ảnh chụp của các lượt quét (ảnh nằm trong CSDL). Dẫn chứng giữ lại, chỉ bỏ đường dẫn ảnh. */
+export async function pruneRunAssets(runIds) {
+  let removed = 0;
+  for (const id of runIds) {
+    const r = await run('DELETE FROM assets WHERE path LIKE ?', `runs/${Number(id)}/%`);
+    removed += r.changes || 0;
+    await run('UPDATE evidence SET asset_path=NULL WHERE run_id=? AND asset_path IS NOT NULL', Number(id));
+  }
+  return removed;
+}
+
+/** Dung lượng ảnh chụp; phần "cũ" = ảnh của lượt quét đã có lượt mới hơn cho cùng web mẫu, hoặc lượt quét lỗi. */
+export async function assetStats() {
+  const all1 = await one('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)),0) AS bytes FROM assets');
+  const old = await staleRunIds();
+  let oldN = 0; let oldBytes = 0;
+  for (const id of old) { const r = await one('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)),0) AS bytes FROM assets WHERE path LIKE ?', `runs/${id}/%`); oldN += Number(r.n); oldBytes += Number(r.bytes); }
+  return { count: Number(all1.n), mb: Math.round(Number(all1.bytes) / 1048576 * 10) / 10, old_count: oldN, old_mb: Math.round(oldBytes / 1048576 * 10) / 10 };
+}
+export async function staleRunIds(olderThanDays = 0) {
+  const latest = new Set((await all("SELECT MAX(id) AS id FROM analysis_runs WHERE status='done' GROUP BY project_id, url")).map((r) => Number(r.id)));
+  const ids = (await all("SELECT id, status, finished_at FROM analysis_runs WHERE status IN ('done','failed')")).filter((r) => !latest.has(Number(r.id))
+    || (olderThanDays > 0 && r.finished_at && Date.now() - Date.parse(String(r.finished_at).replace(' ', 'T') + 'Z') > olderThanDays * 86400000));
+  return ids.map((r) => Number(r.id));
+}
+
 async function storeAsset(relPath, file) {
   if (!file || !fs.existsSync(file)) return;
   await run('INSERT INTO assets (path, content_type, data) VALUES (?,?,?) ON CONFLICT(path) DO UPDATE SET data=excluded.data, content_type=excluded.content_type',
@@ -343,6 +370,7 @@ export async function ingest(job, res) {
       res.ok ? 'done' : 'failed', JSON.stringify({ ...(res.coverage || {}), sitemap: res.sitemap, generator: res.generator, blocked_requests: res.blocked_requests, errors: (res.errors || []).slice(0, 20) }),
       JSON.stringify(res.robots || {}), JSON.stringify(tpl), res.crawler_version || null, res.fatal || null, job.id);
     await audit({ project_id: job.project_id, entity: 'analysis_run', entity_id: job.id, action: res.ok ? 'survey_done' : 'survey_failed', after: { pages: (res.pages || []).length, features: Object.keys(featureEv) } });
+    if (res.ok) await pruneRunAssets((await all('SELECT id FROM analysis_runs WHERE project_id=? AND url=? AND id<>?', job.project_id, job.url, job.id)).map((r) => r.id));
   });
   if (IS_SERVERLESS || process.env.SCAN_WORKER) fs.rmSync(dir, { recursive: true, force: true }); // ảnh đã lưu vào CSDL
 }

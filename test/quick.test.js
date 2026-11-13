@@ -272,3 +272,29 @@ test('hàng đợi có cột route; biết đã từng có bộ quét Việt Nam
   assert.equal(await scanWorkerKnown(), false);
   await run("DELETE FROM app_kv WHERE key='scan_worker_seen'");
 });
+
+test('dọn ảnh: quét lại tự xóa ảnh lượt cũ cùng web mẫu; trang dung lượng + nút dọn chỉ cho quản lý giá', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['don-anh.vn'] });
+  const run1 = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", run1);
+  const scan = { ok: true, input: 'https://don-anh.vn/', sitemap: {}, coverage: { discovered: 2 }, templates: [{ template: 'home', kind: 'home', url_count: 1 }],
+    pages: [{ url: 'https://don-anh.vn/', template: 'home', captured_at: new Date().toISOString(), features: [{ feature: 'SEARCH', detail: 'x', verification: 'observed' }] }] };
+  await ingest({ id: run1, project_id: id, url: 'https://don-anh.vn/' }, scan);
+  for (const f of ['001-desktop.jpg', '001-mobile.jpg']) await run('INSERT INTO assets (path, content_type, data) VALUES (?,?,?)', `runs/${run1}/${f}`, 'image/jpeg', Buffer.alloc(50000));
+  const stats = async (user) => (await fetch(base + '/api/admin/storage', { headers: { 'x-user-id': String(user) } }));
+  assert.equal((await stats(1)).status, 403); // sale không xem / dọn được
+  assert.ok((await (await stats(3)).json()).count >= 2);
+  // quét lại cùng web mẫu → ảnh lượt 1 tự xóa, dẫn chứng vẫn còn
+  await run("INSERT INTO analysis_runs (project_id, url, status) VALUES (?, 'https://don-anh.vn/', 'running')", id);
+  const run2 = Number((await one('SELECT MAX(id) AS id FROM analysis_runs WHERE project_id=?', id)).id);
+  await ingest({ id: run2, project_id: id, url: 'https://don-anh.vn/' }, scan);
+  assert.equal(Number((await one('SELECT COUNT(*) AS n FROM assets WHERE path LIKE ?', `runs/${run1}/%`)).n), 0);
+  assert.ok(Number((await one('SELECT COUNT(*) AS n FROM evidence WHERE run_id=?', run1)).n) > 0);
+  // nút dọn: ảnh của lượt quét lỗi / cũ
+  await run("INSERT INTO analysis_runs (project_id, url, status) VALUES (?, 'https://don-anh.vn/', 'failed')", id);
+  const run3 = Number((await one('SELECT MAX(id) AS id FROM analysis_runs WHERE project_id=?', id)).id);
+  await run('INSERT INTO assets (path, content_type, data) VALUES (?,?,?)', `runs/${run3}/001-desktop.jpg`, 'image/jpeg', Buffer.alloc(30000));
+  const r = await (await fetch(base + '/api/admin/cleanup', { method: 'POST', headers: { 'content-type': 'application/json', 'x-user-id': '3' }, body: '{}' })).json();
+  assert.ok(r.removed >= 1);
+  assert.equal(Number((await one('SELECT COUNT(*) AS n FROM assets WHERE path LIKE ?', `runs/${run3}/%`)).n), 0);
+});

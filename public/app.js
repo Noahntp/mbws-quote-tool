@@ -815,6 +815,10 @@ async function viewPackages() {
 }
 
 // ---------- cấu hình ----------
+async function loadAssetStats() {
+  const el = document.getElementById('assetStats'); if (!el) return;
+  try { const st = await api('/api/admin/storage'); el.innerHTML = `Đang dùng <b>${st.mb} MB</b> (${st.count} ảnh) — trong đó ảnh lượt quét cũ: <b>${st.old_mb} MB</b> (${st.old_count} ảnh)`; } catch (e) { el.textContent = e.message; }
+}
 function viewSettings() {
   const m = S.meta; const cat = m.catalog;
   const rc = m.rate_card; const pol = m.policy;
@@ -832,11 +836,16 @@ function viewSettings() {
     <label class="f">Điều kiện thanh toán mặc định<input data-pol="default_payment_terms" value="${esc(pol?.data.default_payment_terms || '')}"></label>
     <div class="row" style="margin-top:8px"><label class="f">Mã phiên bản mới<input id="pol_ver" value="POL-${today}"></label><label class="f">Hiệu lực từ<input id="pol_from" type="date" value="${today}"></label><button class="primary" data-act="savePol" ${can('settings.edit') ? '' : 'disabled'}>Lưu phiên bản</button></div></div>
   </div>
+  ${can('settings.edit') ? `<div class="panel" id="assetPanel"><h3 style="margin-top:0">Dung lượng ảnh chụp</h3><p class="small muted">Ảnh chụp web mẫu lưu trong cơ sở dữ liệu. Mỗi lần quét xong, ảnh của lượt quét cũ cùng web mẫu tự xóa; nút dưới đây dọn phần còn lại (dữ liệu tính năng, giá không bị ảnh hưởng).</p>
+    <div class="row" style="gap:10px;align-items:center"><span id="assetStats" class="small">Đang tính…</span>
+      <button data-act="cleanupAssets">Dọn ảnh lượt quét cũ</button>
+      <label class="small">và ảnh lượt quét quá <input id="cleanupDays" type="number" min="0" value="0" style="width:60px"> ngày (0 = không)</label></div></div>` : ''}
   <div class="panel"><h3 style="margin-top:0">Lịch sử phiên bản</h3><table><thead><tr><th>Loại</th><th>Phiên bản</th><th>Hiệu lực</th><th>Người duyệt</th><th>Giá trị</th></tr></thead><tbody>
     ${m.settings.map((s) => `<tr><td>${s.kind}</td><td>${esc(s.version)}</td><td>${esc(s.effective_from)} → ${esc(s.effective_to || 'nay')}</td><td>${esc(s.approved_by_name || '')}</td><td class="small muted">${esc(JSON.stringify(s.data))}</td></tr>`).join('')}</tbody></table></div>
   <div class="panel tablewrap"><h3 style="margin-top:0">Danh mục định mức ${esc(cat.version)}</h3><p class="small muted">${esc(cat.note)} Sửa trong <code>data/catalog.json</code>.</p>
     <table><thead><tr><th>Mã</th><th>Đầu việc</th><th>Nhóm</th><th>Vai trò</th><th>Đơn vị</th><th class="n">O</th><th class="n">M</th><th class="n">P</th><th>Tiêu chí hoàn thành</th></tr></thead><tbody>
     ${cat.items.map((i) => `<tr><td class="small">${i.code}</td><td>${esc(i.title)}</td><td>${i.group}</td><td>${i.role}</td><td>${esc(i.unit)}</td><td class="n">${i.o}</td><td class="n">${i.m}</td><td class="n">${i.p}</td><td class="small muted">${esc(i.done)}</td></tr>`).join('')}</tbody></table></div>`;
+  if (can('settings.edit')) loadAssetStats();
 }
 
 async function viewMetrics() {
@@ -952,6 +961,10 @@ const ACT = {
   actSave: run(async (el) => { await api(`/api/projects/${pid()}/actuals`, 'POST', { quote_version_id: Number(el.dataset.id) || null, rows: readActuals() }); toast('Đã lưu giờ thực tế'); reload(); }),
   syncPkgs: run(async () => { toast('Đang đọc matbao.ws (~1 phút)…'); const r = await api('/api/packages/sync', 'POST', {}); await loadMeta(); toast(r.changes.length ? 'Thay đổi giá: ' + r.changes.join(', ') : 'Đồng bộ xong, không đổi giá'); viewPackages(); }),
   pkgLine: (el) => { S.pkgLine = el.dataset.id; viewPackages(); },
+  cleanupAssets: run(async () => {
+    const r = await api('/api/admin/cleanup', 'POST', { older_than_days: Number(val('cleanupDays') || 0) });
+    toast(`Đã xóa ${r.removed} ảnh, giải phóng ${r.freed_mb} MB`); loadAssetStats();
+  }),
   saveRc: run(async () => {
     const data = {}; document.querySelectorAll('[data-rc]').forEach((i) => { data[i.dataset.rc] = Number(i.value); });
     await api('/api/settings', 'POST', { kind: 'rate_card', version: val('rc_ver'), effective_from: val('rc_from'), note: val('rc_note'), data }); await loadMeta(); toast('Đã lưu đơn giá'); viewSettings();

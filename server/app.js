@@ -10,7 +10,7 @@ import { renderCustomerQuote } from './quote-html.js';
 import { suggestFromBrief } from './brief.js';
 import { refreshAssessment, assessComplexity, RUBRIC } from './complexity.js';
 import { mountAuth } from './auth.js';
-import { captureBaseline, enqueueRun, kickQueue, scanWorkerStatus } from './jobs.js';
+import { captureBaseline, enqueueRun, kickQueue, scanWorkerStatus, assetStats, staleRunIds, pruneRunAssets } from './jobs.js';
 
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -87,6 +87,19 @@ function pkgDataWith(policy) {
   const lang = { code: 'ADD_LANGUAGE', name: 'Dựng nội dung ngôn ngữ bổ sung (dịch, dàn trang, nhập liệu)', pct: Number(policy?.extra_language_pct ?? 30), price: 0, unit: '% giá gói', recurring: null, source: 'Giả định nội bộ — sửa ở Đơn giá & chính sách; bỏ nếu khách tự cung cấp bản dịch' };
   return { ...d, addons: [...(d.addons || []).filter((a) => a.code !== ad.code && a.code !== lang.code), ad, lang] };
 }
+
+// Dung lượng ảnh chụp của các lượt quét (lưu trong CSDL) và dọn ảnh lượt quét cũ
+app.get('/api/admin/storage', h(async (req, res) => { need(req, 'settings.edit'); res.json(await assetStats()); }));
+app.post('/api/admin/cleanup', h(async (req, res) => {
+  need(req, 'settings.edit');
+  const days = Math.max(0, Number(req.body?.older_than_days || 0));
+  const before = await assetStats();
+  const ids = await staleRunIds(days);
+  const removed = await pruneRunAssets(ids);
+  await audit({ entity: 'assets', user_id: req.user.id, action: 'cleanup', after: { runs: ids.length, removed, older_than_days: days || null } });
+  const after = await assetStats();
+  res.json({ removed, freed_mb: Math.round((before.mb - after.mb) * 10) / 10, ...after });
+}));
 
 app.post('/api/settings', h(async (req, res) => {
   need(req, 'settings.edit');
