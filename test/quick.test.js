@@ -367,3 +367,11 @@ test('đếm chính xác: số đếm đủ thay số ước lượng (giữ ô 
   assert.equal((await api(`/api/deep-scans/${d.json.id}/apply`, 'POST', {})).status, 400);
   assert.equal((await q('DATA_PRODUCTS')).quantity, 84);
 });
+
+test('đếm chính xác: Vercel chỉ nhường cho bộ quét Việt Nam bản mới (biết đếm đủ); bản cũ chưa khởi động lại thì Vercel tự đếm', async () => {
+  const { workerCanDeep } = await import('../server/deep-jobs.js');
+  assert.equal(workerCanDeep({ alive: true, caps: ['deep'] }), true);
+  assert.equal(workerCanDeep({ alive: true, caps: [] }), false); // bộ quét bản cũ
+  assert.equal(workerCanDeep({ alive: false, caps: ['deep'] }), false);
+  assert.equal(workerCanDeep(null), false);
+});

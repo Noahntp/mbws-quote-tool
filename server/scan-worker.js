@@ -25,7 +25,7 @@ await detectFakeIp();
 await ready();
 
 async function beat() {
-  const value = JSON.stringify({ id, host: os.hostname(), started_at: startedAt, busy: jobs.currentRunId(), deep: deep.currentDeepId(), platform: `${os.platform()} ${os.release()}` });
+  const value = JSON.stringify({ id, host: os.hostname(), started_at: startedAt, busy: jobs.currentRunId(), deep: deep.currentDeepId(), caps: ['deep'], platform: `${os.platform()} ${os.release()}` });
   await run("INSERT INTO app_kv (key, value, updated_at) VALUES ('scan_worker', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", value);
   await run("INSERT INTO app_kv (key, value, updated_at) VALUES ('scan_worker_seen', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", value);
 }

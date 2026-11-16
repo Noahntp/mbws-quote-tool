@@ -46,7 +46,7 @@ export async function scanWorkerStatus() {
   if (!r) return null;
   const at = Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z');
   let v = {}; try { v = JSON.parse(r.value); } catch {}
-  return { host: v.host || null, started_at: v.started_at || null, busy: v.busy || null, last_seen: r.updated_at, alive: Number.isFinite(at) && Date.now() - at < WORKER_FRESH_MS };
+  return { host: v.host || null, started_at: v.started_at || null, busy: v.busy || null, caps: v.caps || [], last_seen: r.updated_at, alive: Number.isFinite(at) && Date.now() - at < WORKER_FRESH_MS };
 }
 
 /** Serverless: chạy tiếp hàng đợi sau khi trả lời yêu cầu (trong giới hạn thời gian của hàm).

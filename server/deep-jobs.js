@@ -39,12 +39,14 @@ export async function queueDeepScan(projectId, url, userId) {
   return { id };
 }
 
-/** Vercel: chạy một chặng sau khi trả lời yêu cầu (trang đang mở gọi lại định kỳ → chạy tiếp). Bộ quét Việt Nam đang chạy → nhường. */
+/** Vercel: chạy một chặng sau khi trả lời yêu cầu (trang đang mở gọi lại định kỳ → chạy tiếp).
+ *  Bộ quét Việt Nam đang chạy bản có "đếm đủ" → nhường; bộ quét bản cũ (chưa khởi động lại) không biết đếm → Vercel vẫn đếm. */
+export const workerCanDeep = (w) => !!(w?.alive && (w.caps || []).includes('deep'));
 export function kickDeep() {
   if (!IS_SERVERLESS) return;
   const p = (async () => {
     const w = await scanWorkerStatus().catch(() => null);
-    if (w?.alive) return;
+    if (workerCanDeep(w)) return;
     await processDeepNext();
   })().catch((e) => console.error('[đếm đủ]', e.message));
   try { waitUntil(p); } catch { /* ngoài môi trường Vercel */ }

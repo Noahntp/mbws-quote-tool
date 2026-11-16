@@ -367,7 +367,7 @@ function deepHtml(P) {
     const waitVn = /^Chờ bộ quét Việt Nam/.test(d.error || '');
     const step = g.phase === 'images' ? `đo dung lượng ảnh ${num(g.img_done || 0, 0)}/${num(g.images || 0, 0)}` : g.phase === 'crawl' ? `đã đọc ${num(g.pages || 0, 0)} trang, còn ${num(g.queued || 0, 0)} trang chờ` : 'đọc sitemap';
     body = `<span title="${esc(d.error || '')}">${chip(waitVn ? 'chờ bộ quét Việt Nam' : 'đang đếm toàn bộ web…', 'warn')}</span> ${esc(step)} · ${num(g.products || 0, 0)} sản phẩm · ${num(g.posts || 0, 0)} bài viết${can('survey.run') ? ` <button class="link small" data-act="deepStop" data-id="${d.id}">Dừng</button>` : ''}
-      ${sc && !sc.local && !sc.worker?.alive && !waitVn ? `<div class="muted">Máy chủ Vercel đếm từng chặng ~3 phút: giữ trang này mở để đếm tiếp (hoặc bật bộ quét Việt Nam).</div>` : ''}`;
+      ${sc && !sc.local && !(sc.worker?.alive && (sc.worker.caps || []).includes('deep')) && !waitVn ? `<div class="muted">Máy chủ Vercel đếm từng chặng ~3 phút: giữ trang này mở để đếm tiếp${sc.worker?.alive ? ' (bộ quét Việt Nam đang chạy bản cũ — khởi động lại để nó đếm thay)' : ' (hoặc bật bộ quét Việt Nam)'}.</div>` : ''}`;
   } else if (d.status === 'failed') body = `<span title="${esc(d.error || '')}">${chip('đếm toàn bộ lỗi: ' + (d.error || '').slice(0, 120), 'err')}</span> ${btn('Đếm lại')}`;
   else {
     const r = d.result || {};
