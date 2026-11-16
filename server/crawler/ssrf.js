@@ -117,7 +117,8 @@ export async function safeFetchText(url, { timeoutMs = 10000, maxBytes = 2_000_0
   throw new Error('Quá nhiều chuyển hướng');
 }
 
-/** Kích thước tệp (byte) theo máy chủ báo, không tải cả tệp: HEAD, máy chủ không hỗ trợ thì GET 1 byte (Range). null = không biết. */
+/** Kích thước tệp (byte) theo máy chủ báo, không tải cả tệp: HEAD, máy chủ không hỗ trợ thì GET 1 byte (Range).
+ *  0 = tệp không tồn tại (404/410 hoặc máy chủ trả trang HTML thay cho ảnh), null = không biết (lỗi mạng, bị chặn…). */
 export async function safeHeadSize(url, { timeoutMs = 8000, maxRedirects = 5, userAgent } = {}) {
   const headers = { 'user-agent': userAgent || 'MBWS-QuoteBot/0.1' };
   const go = async (method, extra = {}) => {
@@ -130,6 +131,7 @@ export async function safeHeadSize(url, { timeoutMs = 8000, maxRedirects = 5, us
         const res = await fetch(current, { method, redirect: 'manual', signal: ctrl.signal, headers: { ...headers, ...extra } });
         if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { current = new URL(res.headers.get('location'), current).toString(); continue; }
         try { await res.body?.cancel(); } catch { /* bỏ qua */ }
+        if (res.status === 404 || res.status === 410 || (res.ok && /text\/html/i.test(res.headers.get('content-type') || ''))) return 0; // ảnh hỏng / trang báo lỗi
         const total = Number((res.headers.get('content-range') || '').split('/')[1]);
         if (res.status === 206 && total > 0) return total;
         const len = Number(res.headers.get('content-length'));
@@ -139,5 +141,5 @@ export async function safeHeadSize(url, { timeoutMs = 8000, maxRedirects = 5, us
     return null;
   };
   const n = await go('HEAD').catch(() => null);
-  return n || go('GET', { range: 'bytes=0-0' }).catch(() => null);
+  return n || n === 0 ? n : go('GET', { range: 'bytes=0-0' }).catch(() => null);
 }
