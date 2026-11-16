@@ -34,14 +34,21 @@ export function detectInPage() {
   const short = (s, n = 60) => s.slice(0, n);
 
   // ---------- Giỏ hàng ----------
-  const NOT_BUY = /(liên hệ|báo giá|xem thêm|xem chi tiết|tư vấn|đăng ký|contact|quote|enquir|inquir|read more|learn more|details)/i;
+  const isCallOrContact = (e) => {
+    const href = (e.getAttribute('href') || '').toLowerCase();
+    if (/^(tel:|mailto:|sms:)/i.test(href) || href.includes('zalo.me')) return true;
+    const txt = label(e);
+    if (/(hotline|gọi điện|tổng đài|liên hệ|tư vấn|báo giá|\b0\d{8,10}\b)/i.test(txt)) return true;
+    return false;
+  };
+  const NOT_BUY = /(liên hệ|báo giá|xem thêm|xem chi tiết|tư vấn|đăng ký|hotline|contact|quote|enquir|inquir|read more|learn more|details)/i;
   const addToCart = qa('button[name="add-to-cart"], .add_to_cart_button, .single_add_to_cart_button, form[action*="/cart" i] button, [data-action*="add-to-cart" i], [data-action*="addtocart" i], [class*="add-to-cart" i], [id*="add-to-cart" i], [class*="addtocart" i], [class*="btn-cart" i]')
-    .find((e) => isReal(e) && !NOT_BUY.test(label(e))); // class kiểu giỏ hàng nhưng chữ "Liên hệ báo giá" = nút xin báo giá
-  const cartBtn = buttons.find((e) => /(thêm vào giỏ|cho vào giỏ|add to (cart|bag|basket)|giỏ hàng của bạn)/i.test(label(e)));
+    .find((e) => isReal(e) && !NOT_BUY.test(label(e)) && !isCallOrContact(e)); // class kiểu giỏ hàng nhưng chữ "Liên hệ báo giá" = nút xin báo giá
+  const cartBtn = buttons.find((e) => /(thêm vào giỏ|cho vào giỏ|add to (cart|bag|basket)|giỏ hàng của bạn)/i.test(label(e)) && !isCallOrContact(e));
   const cartLink = findLink((l) => same(l) && /(^|\/)(gio-hang|cart|checkout|thanh-toan|basket)(\/|$|\?|\.)/.test(l.u.pathname.toLowerCase()));
-  const BUY = /(^|\b)(mua ngay|mua hàng|chọn mua|đặt hàng|đặt mua|buy now|order now|hotline đặt hàng|liên hệ đặt hàng)(\b|$)/i;
+  const BUY = /(^|\b)(mua ngay|mua hàng|chọn mua|đặt mua|buy now|order now|thêm vào giỏ|đặt hàng)(\b|$)/i;
   const NOT_ACTION = /(hướng dẫn|chính sách|quy định|điều khoản|cẩm nang|faq|tin tức|bài viết)/i;
-  const buyBtns = qa('button, a, [role=button], div, span').filter((e) => isReal(e) && e.children.length <= 2 && label(e).length <= 50 && BUY.test(label(e)) && !NOT_ACTION.test(label(e)));
+  const buyBtns = qa('button, a, [role=button], div, span').filter((e) => isReal(e) && e.children.length <= 2 && label(e).length <= 50 && BUY.test(label(e)) && !NOT_ACTION.test(label(e)) && !isCallOrContact(e));
   const orderLink = findLink((l) => /^(delivery|order|dat-?mon|giao-?hang|shop)\./.test(l.host) || /^(delivery|order online|đặt món|giao hàng|đặt món online)$/i.test(l.text));
   const priceCount = ((document.body?.innerText || '').match(/\d{1,3}(?:[.,]\d{3})+\s?(?:₫|đồng|vnđ|vnd|đ(?![a-zà-ỹ]))/gi) || []).length;
   if (addToCart) add('CART', `Nút thêm vào giỏ: "${short(label(addToCart) || addToCart.className)}"`);

@@ -78,6 +78,18 @@ test('Siêu thị online: nhiều nút "Mua ngay" cạnh giá, khung tìm kiếm
   observed(f, 'CART'); observed(f, 'SEARCH');
 });
 
+test('Nút hotline đặt hàng cạnh giá sản phẩm là PHONE_CALL, không phải CART', async () => {
+  const items = [1, 2, 3, 4].map((i) => `
+    <div class="product">
+      <h3>Nước khoáng Lavie ${i}L</h3>
+      <div class="price">${i * 50}.000₫</div>
+      <a href="tel:0933494804" class="btn">ĐẶT HÀNG 0933 494 804</a>
+    </div>`).join('');
+  const { f } = await detect(`<div>${items}</div>`);
+  absent(f, 'CART');
+  observed(f, 'PHONE_CALL');
+});
+
 test('Một nút "Mua ngay" đơn lẻ (landing page) chỉ là có thể có', async () => {
   const { f } = await detect('<h1>Khóa học</h1><a href="#dang-ky">Mua ngay</a>');
   notTicked(f, 'CART');
