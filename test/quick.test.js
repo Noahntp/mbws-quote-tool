@@ -319,3 +319,51 @@ test('robots.txt chặn trang con: vẫn ước số mẫu trang / dịch vụ /
   assert.equal(qty('DATA_PRODUCTS'), 2); // dịch vụ tính chung SP/DV
   assert.ok(p.evidence.some((e) => e.kind === 'note' && /robots\.txt/.test(e.detail)), 'phải ghi chú cho sale vì sao chỉ ước lượng');
 });
+
+test('đếm chính xác: số đếm đủ thay số ước lượng (giữ ô sale nhập tay), quét nhanh lại không ghi đè, "Dùng số này" ghi đè', async () => {
+  const { json: { id } } = await api('/api/projects', 'POST', { ref_urls: ['demcx-test.vn'] });
+  const runId = (await api(`/api/projects/${id}`)).json.runs[0].id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", runId); // không để vòng lặp quét thật nhận job
+  const res = { ok: true, input: 'https://demcx-test.vn/', sitemap: { product_urls: 20, post_urls: 30 }, coverage: { discovered: 60 }, metrics: { img_bytes: 0, img_sized: 0 },
+    templates: [{ template: 'home', kind: 'home', url_count: 1 }, { template: 'product:detail', kind: 'product', url_count: 20 }, { template: 'blog:detail', kind: 'blog', url_count: 30 }],
+    pages: [{ url: 'https://demcx-test.vn/', template: 'home', captured_at: new Date().toISOString(), features: [] }] };
+  await ingest({ id: runId, project_id: id, url: 'https://demcx-test.vn/' }, res);
+  const q = (f) => one('SELECT quantity, source_kind FROM requirements WHERE project_id=? AND feature=?', id, f);
+  assert.equal((await q('DATA_PRODUCTS')).quantity, 20); // ước lượng của lượt quét nhanh
+
+  const d = await api(`/api/projects/${id}/deep-scan`, 'POST', {});
+  assert.equal(d.status, 200);
+  assert.equal((await api(`/api/projects/${id}/deep-scan`, 'POST', {})).json.id, d.json.id); // đang đếm thì không tạo lượt trùng
+  let p = (await api(`/api/projects/${id}`)).json;
+  assert.equal(p.deep.status, 'queued');
+  assert.equal((await api(`/api/projects/${id}/deep-scan`, 'POST', { url: 'https://khac.vn/' })).status, 400); // chỉ đếm web mẫu đã thêm vào hồ sơ
+
+  await run("UPDATE requirements SET quantity=45, source_kind='client' WHERE project_id=? AND feature='DATA_POSTS'", id); // sale tự nhập số bài
+  await run("UPDATE deep_scans SET status='done', finished_at=datetime('now'), result_json=? WHERE id=?", JSON.stringify({ url: 'https://demcx-test.vn/', pages: 800, products: 84, posts: 578, images: 1120, images_sized: 1096, image_bytes: 513e6, truncated: false, js_only: false, via: { layout: 84, date: 578 } }), d.json.id);
+  const { applyDeepResult, storageFromExact } = await import('../server/deep-jobs.js');
+  assert.equal((await applyDeepResult(d.json.id)).applied, true);
+  assert.deepEqual({ ...(await q('DATA_PRODUCTS')) }, { quantity: 84, source_kind: 'observed' });
+  assert.equal((await q('DATA_POSTS')).quantity, 45); // số sale nhập tay giữ nguyên
+  assert.equal((await q('HOSTING_STORAGE')).quantity, 1); // 300 MB mã nguồn + 489 MB ảnh đo thật ≈ 0,77 GB → 1 GB
+  assert.match(storageFromExact({ image_bytes: 513e6, images: 1120, images_sized: 1096 }).how, /489 MB ảnh/);
+  p = (await api(`/api/projects/${id}`)).json;
+  assert.equal(p.deep.status, 'done');
+  assert.equal(p.project.pricing.volumes_exact.products, 84);
+  assert.equal(p.project.pricing.volumes.exact, true);
+
+  // quét nhanh lại: giữ số đếm đủ, không thay bằng ước lượng
+  const run2 = (await api(`/api/projects/${id}/survey`, 'POST', { ref_id: p.refs[0].id })).json.id;
+  await run("UPDATE job_queue SET status='done' WHERE run_id=?", run2);
+  await ingest({ id: run2, project_id: id, url: 'https://demcx-test.vn/' }, res);
+  assert.equal((await q('DATA_PRODUCTS')).quantity, 84);
+  assert.equal(JSON.parse((await one('SELECT pricing_json FROM projects WHERE id=?', id)).pricing_json).volumes.products, 84);
+
+  // "Dùng số này": ghi đè cả số sale đã nhập
+  assert.equal((await api(`/api/deep-scans/${d.json.id}/apply`, 'POST', {})).status, 200);
+  assert.equal((await q('DATA_POSTS')).quantity, 578);
+
+  // web chỉ chạy JavaScript (HTML rỗng): không điền số 0 vào báo giá
+  await run("UPDATE deep_scans SET result_json=? WHERE id=?", JSON.stringify({ url: 'https://demcx-test.vn/', pages: 1, products: 0, posts: 0, images: 0, image_bytes: 0, js_only: true }), d.json.id);
+  assert.equal((await api(`/api/deep-scans/${d.json.id}/apply`, 'POST', {})).status, 400);
+  assert.equal((await q('DATA_PRODUCTS')).quantity, 84);
+});

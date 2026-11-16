@@ -10,7 +10,7 @@ import { waitUntil } from '@vercel/functions';
 import { one, all, run, tx, audit, DATA_DIR, ROOT, loadJson, IS_SERVERLESS, IS_PG } from './db.js';
 import { assessComplexity, measureFromScan } from './complexity.js';
 import { estimateStorage } from './volume.js';
-import { classify } from './crawler/urls.js';
+import { classify, domainOf } from './crawler/urls.js';
 
 const MAX_ATTEMPTS = 2;
 const BUDGET_MS = Number(process.env.CRAWLER_BUDGET_MS || (IS_SERVERLESS ? 190000 : 240000));
@@ -145,7 +145,7 @@ async function executeRun(job) {
   });
 }
 
-async function nextCode(table, projectId, prefix) {
+export async function nextCode(table, projectId, prefix) {
   const rows = await all(`SELECT code FROM ${table} WHERE project_id=? AND code LIKE ?`, projectId, prefix + '%');
   const max = rows.reduce((m, r) => Math.max(m, Number(r.code.slice(prefix.length)) || 0), 0);
   return prefix + String(max + 1).padStart(3, '0');
@@ -318,7 +318,15 @@ export async function ingest(job, res) {
       featureEv.HOSTING_STORAGE = { codes: [code], best: 'inferred' }; quantities.HOSTING_STORAGE = storage.gb;
     }
     if (featureEv.MULTILANG) quantities.MULTILANG = Math.max(1, (res.metrics?.max_languages || 2) - 1);
-    const volumes = { urls: totalUrls, templates: quantities.PAGES ?? null, products: prodCount || 0, posts: postCount || 0, storage };
+    let volumes = { urls: totalUrls, templates: quantities.PAGES ?? null, products: prodCount || 0, posts: postCount || 0, storage };
+    // đã "Đếm chính xác" web này → giữ số đếm thật, không thay bằng số ước lượng của lượt quét nhanh
+    const exact = JSON.parse((await one('SELECT pricing_json FROM projects WHERE id=?', job.project_id))?.pricing_json || '{}').volumes_exact;
+    if (exact && domainOf(exact.url) === domainOf(job.url)) {
+      if (exact.products > 0) quantities.DATA_PRODUCTS = exact.products;
+      if (exact.posts > 0) quantities.DATA_POSTS = exact.posts;
+      if (exact.storage?.gb) quantities.HOSTING_STORAGE = exact.storage.gb;
+      volumes = { ...volumes, products: exact.products || volumes.products, posts: exact.posts || volumes.posts, storage: exact.storage || storage, exact: true };
+    }
 
     // Độ phức tạp web mẫu → mức may đo M1–M8 (quyết định gói tối thiểu và vị trí giá trong khoảng của gói)
     // Chỉ dùng bảng tiêu chí công khai (quy mô, độ dày giao diện, menu, ngôn ngữ, nền tảng) — tính năng đã tính qua gói, không cộng lại.

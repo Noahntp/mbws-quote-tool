@@ -103,6 +103,14 @@ CREATE TABLE IF NOT EXISTS job_queue (
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')),
   attempts INTEGER NOT NULL DEFAULT 0, locked_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
 
+-- "Đếm chính xác": đi hết web mẫu để đếm thật sản phẩm / bài viết / dung lượng ảnh. Chạy theo chặng,
+-- state_json giữ hàng đợi & số đã đếm để chặng sau chạy tiếp (Vercel giới hạn 5 phút / lần).
+CREATE TABLE IF NOT EXISTS deep_scans (
+  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, url TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')), route TEXT NOT NULL DEFAULT 'any',
+  locked_at TEXT, state_json TEXT, progress_json TEXT, result_json TEXT, error TEXT, applied INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT);
+
 -- Ảnh chụp dẫn chứng (lưu trong CSDL để chạy được trên máy chủ không có ổ đĩa cố định)
 CREATE TABLE IF NOT EXISTS assets (
   path TEXT PRIMARY KEY, content_type TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));

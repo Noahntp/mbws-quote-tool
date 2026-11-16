@@ -11,6 +11,7 @@ import { suggestFromBrief } from './brief.js';
 import { refreshAssessment, assessComplexity, RUBRIC } from './complexity.js';
 import { mountAuth } from './auth.js';
 import { captureBaseline, enqueueRun, kickQueue, scanWorkerStatus, assetStats, staleRunIds, pruneRunAssets } from './jobs.js';
+import { queueDeepScan, kickDeep, latestDeep, applyDeepResult, stopDeep } from './deep-jobs.js';
 
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -251,7 +252,9 @@ app.get('/api/projects/:id', h(async (req, res) => {
   if (!p) await projectOr404(id);
   const st = await projectState(id);
   kickQueue(); // serverless: tiếp tục lượt quét đang chờ (nếu có)
+  kickDeep(); // serverless: chạy tiếp một chặng "Đếm chính xác" (nếu có)
   res.json({
+    deep: await latestDeep(id),
     project: { ...p, pricing: JSON.parse(p.pricing_json), pricing_json: undefined },
     status: st.status, status_label: STATUS_LABEL[st.status],
     refs: await all('SELECT * FROM refs WHERE project_id=? ORDER BY id', id),
@@ -341,6 +344,30 @@ app.post('/api/projects/:id/survey-all', h(async (req, res) => {
   for (const r of refs) { if (seen.has(r.url)) continue; seen.add(r.url); ids.push(await queueSurvey(pid, r.id, r.url, req.body.max_urls, req.user.id)); }
   kickQueue();
   res.json({ ok: true, queued: ids.length });
+}));
+
+// "Đếm chính xác": đi hết web mẫu để đếm thật số sản phẩm / bài viết / dung lượng ảnh (chạy riêng, 1–30 phút)
+app.post('/api/projects/:id/deep-scan', h(async (req, res) => {
+  need(req, 'survey.run');
+  const pid = Number(req.params.id);
+  await projectOr404(pid);
+  const refs = await all('SELECT url FROM refs WHERE project_id=? ORDER BY id', pid);
+  const url = req.body.url ? String(req.body.url) : refs[0]?.url;
+  if (!url || !refs.some((r) => r.url === url)) throw new HttpError(400, 'Chọn web mẫu đã thêm vào hồ sơ');
+  const r = await queueDeepScan(pid, url, req.user.id);
+  kickDeep();
+  res.json(r);
+}));
+app.post('/api/deep-scans/:id/apply', h(async (req, res) => {
+  need(req, 'requirement.edit');
+  const r = await applyDeepResult(Number(req.params.id), { force: true, userId: req.user.id });
+  if (!r.applied) throw new HttpError(400, r.reason);
+  res.json(r);
+}));
+app.post('/api/deep-scans/:id/stop', h(async (req, res) => {
+  need(req, 'survey.run');
+  await stopDeep(Number(req.params.id));
+  res.json({ ok: true });
 }));
 
 // Chốt nhanh: mọi yêu cầu đang chờ / hỏi lại → Làm (hoặc Bỏ)
