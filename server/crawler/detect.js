@@ -209,6 +209,17 @@ export function detectInPage() {
     price_count: priceMatches.length,
     product_schema: productSchema,
     page_kind: pageKind,
+    pagination_max: (() => {
+      // số trang lớn nhất trong khối phân trang (?page=12, /page/12, trang-12, &page=12…)
+      let max = 1;
+      for (const a of qa('a[href]')) {
+        const href = a.getAttribute('href') || '';
+        const m = href.match(/(?:[?&](?:page|paged|p|trang)=|\/page\/|\/trang-|[?&]pg=)(\d{1,4})\b/i);
+        if (m) max = Math.max(max, Number(m[1]));
+        else if (/^\d{1,4}$/.test((a.textContent || '').trim()) && a.closest('[class*="pag" i], nav[aria-label*="pag" i], [class*="phan-trang" i]')) max = Math.max(max, Number(a.textContent.trim()));
+      }
+      return max > 500 ? 1 : max; // số quá lớn thường không phải phân trang
+    })(),
     list_items: (() => {
       let best = { count: 0, titles: [] };
       const sig = (x) => x.tagName + '.' + [...x.classList].sort().join('.');
@@ -227,6 +238,26 @@ export function detectInPage() {
           }
         }
       }
+      // Cách 2: thẻ không có tiêu đề h2–h4 (tên nằm trong liên kết, vd lưới sản phẩm "ảnh + tên") → đếm liên kết khác nhau
+      // trong nhóm thẻ lặp lại cùng kiểu
+      const groups = new Map();
+      for (const a of qa('a[href]')) {
+        const text = (a.textContent || '').trim().replace(/\s+/g, ' ');
+        const href = a.getAttribute('href') || '';
+        if (text.length < 8 || /^(#|javascript:|tel:|mailto:)/i.test(href) || a.closest('header, nav, footer, aside, [class*="menu" i]')) continue;
+        let el = a;
+        for (let i = 0; i < 6 && el.parentElement; i++, el = el.parentElement) {
+          const par = el.parentElement;
+          if (par.closest('header, nav, footer, aside, [class*="menu" i]')) break;
+          if ([...par.children].filter((c) => sig(c) === sig(el)).length >= 3) {
+            const g = groups.get(par) || new Map();
+            if (!g.has(href)) g.set(href, text.slice(0, 90));
+            groups.set(par, g);
+            break;
+          }
+        }
+      }
+      for (const g of groups.values()) if (g.size > best.count) best = { count: g.size, titles: [...g.values()].slice(0, 5) };
       return best;
     })(),
     metrics,

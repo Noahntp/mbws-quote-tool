@@ -75,6 +75,13 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     try { await assertPublicUrl(alt.toString()); start = alt.toString(); log('tên miền gốc không có địa chỉ → quét', start); }
     catch { return finish(false, `${e.message} Đã thử cả www.${u0.hostname} cũng không được. Kiểm tra lại tên miền với khách, hoặc tick tính năng tay ở mục 2.`); }
   }
+  try { await safeFetchText(start, { userAgent: UA_TOKEN, maxBytes: 4000 }); } catch (e) {
+    const code = String(e?.cause?.code || e?.code || e?.message || '');
+    if (/CERT|SSL|TLS/i.test(code)) {
+      const alt = new URL(start); alt.hostname = alt.hostname.startsWith('www.') ? alt.hostname.slice(4) : 'www.' + alt.hostname;
+      try { await assertPublicUrl(alt.toString()); await safeFetchText(alt.toString(), { userAgent: UA_TOKEN, maxBytes: 4000 }); log('chứng chỉ SSL lỗi ở', start, '→ dùng', alt.toString()); start = alt.toString(); } catch { /* cả hai lỗi: để bước mở trang chủ xử lý */ }
+    }
+  }
   const root = new URL(start);
   const rootHost = root.hostname;
 
@@ -99,7 +106,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     }
     const k = dedupeKey(u);
     const key = k.replace(/^(https?:\/\/)www\./, '$1'); // www.x.vn và x.vn là một trang
-    if (!discovered.has(key) && discovered.size < 5000) discovered.set(key, k);
+    if (!discovered.has(key) && discovered.size < 5000) discovered.set(key, u); // giữ đường dẫn gốc để mở đúng trang
     return discovered.get(key);
   };
   const sitemapOf = new Map(); // URL → tên file sitemap chứa nó
@@ -205,6 +212,8 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       const finalUrl = p.url();
       if (!sameSite(finalUrl, rootHost)) throw new Error(`Chuyển hướng ra ngoài phạm vi: ${finalUrl}`);
       page.final_url = finalUrl;
+      const pageTitle = await p.title().catch(() => '');
+      if (/\/(404|error-?404|not-?found)(\.(php|html?|aspx?))?\/?$/i.test(new URL(finalUrl).pathname) || /^(404\b|không tìm thấy trang|page not found|not found\b)/i.test(pageTitle.trim())) throw new Error('HTTP 404 (trang không tồn tại — máy chủ trả về trang báo lỗi)');
       const text = (await p.evaluate(() => document.body?.innerText || '')).toLowerCase();
       const wall = botWall({ url: finalUrl, title: await p.title().catch(() => ''), text, marker: await p.evaluate(WALL_MARKER_JS).catch(() => false) });
       if (wall) {
@@ -215,6 +224,7 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
       page.title = d.title; page.lang = d.lang; page.text_excerpt = d.text_excerpt; page.price_count = d.price_count; page.page_kind = d.page_kind; page.metrics = d.metrics;
       page.layout = await p.evaluate(layoutSignatureInPage).catch(() => null);
       page.list_items = d.list_items; // số mục bài viết / sản phẩm / dịch vụ hiện trên trang (trang danh sách)
+      page.pagination_max = d.pagination_max; // số trang cuối của phân trang (ước tổng = số mục × số trang)
       if (!page.blocked) page.features = d.features;
       if (d.generator && !result.generator) result.generator = d.generator;
       page.links_count = d.links.length;

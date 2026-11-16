@@ -155,3 +155,12 @@ test('đếm số mục bài viết / dịch vụ hiện trên trang danh sách 
   assert.equal(d.list_items.count, 5); // không đếm menu đầu trang
   assert.match(d.list_items.titles[0], /thành lập công ty/);
 });
+
+test('lưới sản phẩm không có tiêu đề h2–h4 (ảnh + tên trong liên kết) vẫn đếm được; đọc số trang cuối của phân trang', async () => {
+  const card = (i) => `<div class="col-3 item"><div class="img"><a href="/nuoc/sp-${i}.html"><img src="a.jpg"></a></div><div class="tit"><a href="/nuoc/sp-${i}.html">Nước tinh khiết số ${i} bình 19L</a></div></div>`;
+  const { d } = await detect(`<nav class="menu"><a href="/a.html">Giới thiệu công ty</a><a href="/b.html">Liên hệ với chúng tôi</a><a href="/c.html">Tin tức mới nhất</a></nav>
+    <div class="grid">${Array.from({ length: 12 }, (_, i) => card(i + 1)).join('')}</div>
+    <div class="pagination"><a href="/san-pham/&page=0">‹</a><a href="/san-pham/&page=2">2</a><a href="/san-pham/&page=3">3</a><a href="/san-pham/&page=4">»</a></div>`, 'https://shop.test/san-pham/');
+  assert.equal(d.list_items.count, 12);
+  assert.equal(d.pagination_max, 4);
+});

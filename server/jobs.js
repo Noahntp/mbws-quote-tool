@@ -285,12 +285,16 @@ export async function ingest(job, res) {
     }
     const sumUrls = (pred) => tpl.filter(pred).reduce((n, t) => n + (mainLoc ? perLang(urlsOf(t)) : (t.url_count || 0)), 0);
     const prodByTpl = sumUrls((t) => tplKey(t) === 'product:detail' || t.template === 'service:detail'); // gói matbao.ws tính chung sản phẩm / dịch vụ (SP/DV)
-    const listMax = (re) => Math.max(0, ...(res.pages || []).filter((p) => !p.error && !p.blocked && (re.test(p.template || '') || re.test(classify(p.url).template))).map((p) => p.list_items?.count || 0));
+    // số mục trên trang danh sách × số trang cuối của phân trang (trang cuối có thể ít hơn → làm tròn xuống nửa trang)
+    const listPages = (re) => (res.pages || []).filter((p) => !p.error && !p.blocked && (re.test(p.template || '') || re.test(classify(p.url).template)));
+    const listEst = (p) => { const n = p.list_items?.count || 0; const pg = Math.max(1, Number(p.pagination_max) || 1); return pg > 1 ? Math.round(n * (pg - 0.5)) : n; };
+    const listMax = (re) => Math.max(0, ...listPages(re).map(listEst));
+    const listPaged = (re) => listPages(re).some((p) => (p.pagination_max || 1) > 1 && (p.list_items?.count || 0) > 0);
     const prodByList = listMax(/^(product|service):list$/);
     const prodBySitemap = Math.round((res.sitemap?.product_urls || 0) / Math.max(1, locales.length >= 2 ? locales.length : 1));
     const prodCount = Math.max(prodByTpl, prodBySitemap, prodByList);
     if (prodCount) {
-      const how = prodCount === prodByList && prodByList > Math.max(prodByTpl, prodBySitemap) ? 'số sản phẩm / dịch vụ hiện trên trang danh sách — ít nhất' : prodBySitemap >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
+      const how = prodCount === prodByList && prodByList > Math.max(prodByTpl, prodBySitemap) ? (listPaged(/^(product|service):list$/) ? 'số mục trên trang danh sách × số trang phân trang — ước lượng' : 'số sản phẩm / dịch vụ hiện trên trang danh sách — ít nhất') : prodBySitemap >= prodByTpl ? 'sitemap sản phẩm' : 'nhóm URL có nội dung trang sản phẩm';
       const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_PRODUCTS', detail: `~${prodCount} sản phẩm trên web mẫu (theo ${how}) — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_PRODUCTS = { codes: [code], best: 'inferred' }; quantities.DATA_PRODUCTS = prodCount;
     }
@@ -299,7 +303,7 @@ export async function ingest(job, res) {
     const postByList = listMax(/^blog:list$/);
     const postCount = Math.max(postByUrl, postByList);
     if (postCount) {
-      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu${postByList > postByUrl ? ' (theo số bài hiện trên trang tin tức — ít nhất)' : ''} — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
+      const code = await addEv({ url: res.input, kind: 'volume', feature: 'DATA_POSTS', detail: `~${postCount} bài viết trên web mẫu${postByList > postByUrl ? (listPaged(/^blog:list$/) ? ' (số bài trên trang tin tức × số trang phân trang — ước lượng)' : ' (theo số bài hiện trên trang tin tức — ít nhất)') : ''} — tự điền, sale sửa nếu khách cần số khác`, verification: 'inferred' });
       featureEv.DATA_POSTS = { codes: [code], best: 'inferred' }; quantities.DATA_POSTS = postCount;
     }
     // Dự đoán dung lượng lưu trữ theo khối lượng web mẫu (công thức công khai ở volume.js)
