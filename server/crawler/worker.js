@@ -150,11 +150,12 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     return route.continue();
   };
   const mkContext = async (opts) => {
-    const ctx = await browser.newContext({ ...opts, javaScriptEnabled: !staticMode, userAgent: BOT_UA, acceptDownloads: false, serviceWorkers: 'block', locale: 'vi-VN' });
+    const ctx = await browser.newContext({ ...opts, javaScriptEnabled: !staticMode, ignoreHTTPSErrors: certLax, userAgent: BOT_UA, acceptDownloads: false, serviceWorkers: 'block', locale: 'vi-VN' });
     await ctx.route('**/*', guard);
     return ctx;
   };
   let desktop; let mobile; let staticMode = false; // staticMode: chỉ đọc HTML máy chủ trả về (không chạy JavaScript)
+  let certLax = false; // web mẫu lỗi chứng chỉ SSL → vẫn đọc trang (bộ quét chỉ đọc, không gửi dữ liệu)
   const openContexts = async () => {
     desktop = await mkContext({ viewport: { width: 1366, height: 900 } });
     mobile = LIGHT ? null : await mkContext({ ...(await devicesPreset('iPhone 13')) });
@@ -255,6 +256,26 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   let homeFail = null;
   try {
     let home = await visit(start, 'home', 'home');
+    const CERT = /ERR_CERT_|ERR_SSL_|SSL_ERROR|SSL_PROTOCOL|certificate/i;
+    if (home?.error && CERT.test(home.error_raw || home.error) && timeLeft() > 40000) {
+      const certErr = (home.error_raw || home.error).match(/ERR_[A-Z_]+/)?.[0] || 'lỗi chứng chỉ';
+      const firstUrl = start;
+      const drop = (pg, url) => { result.pages = result.pages.filter((x) => x !== pg); result.errors = result.errors.filter((x) => x.url !== url); visited.delete(url.replace(/^(https?:\/\/)www\./, '$1')); };
+      drop(home, start);
+      // 1) chứng chỉ thường chỉ cấp cho tên miền có hoặc không có www → thử dạng còn lại
+      const alt = new URL(start); alt.hostname = alt.hostname.startsWith('www.') ? alt.hostname.slice(4) : 'www.' + alt.hostname;
+      let h2 = null;
+      try { await assertPublicUrl(alt.toString()); h2 = await visit(alt.toString(), 'home', 'home'); } catch { h2 = null; }
+      if (h2 && !h2.error && !h2.blocked) { home = h2; start = alt.toString(); }
+      else {
+        // 2) vẫn lỗi → đọc trang bỏ qua lỗi chứng chỉ (chỉ đọc nội dung công khai)
+        if (h2) drop(h2, alt.toString());
+        certLax = true; await ensureBrowser(true);
+        home = await visit(start, 'home', 'home');
+      }
+      result.cert_issue = { host: new URL(firstUrl).hostname, error: certErr, used: start, lax: certLax };
+      log('lỗi chứng chỉ SSL', certErr, '→', certLax ? 'đọc bỏ qua chứng chỉ' : 'dùng ' + start);
+    }
     // Trang chủ bị chặn (trang chống bot) hoặc quá nặng làm sập trình duyệt → quét lại bản HTML tĩnh (tắt JavaScript):
     // nhẹ, tránh được script chống bot; web dựng sẵn HTML (WordPress, sàn lớn có SSR…) vẫn đọc được tính năng.
     const netBlock = home?.error && NET_BLOCK.test(home.error_raw || home.error);
@@ -279,7 +300,9 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     else if (denied && /429/.test(home.error)) homeFail = 'Web mẫu đang giới hạn số lượt truy cập (HTTP 429). Thử "Quét lại" sau vài phút, hoặc tick tính năng tay.';
     else if (denied) homeFail = `Web mẫu từ chối máy quét (${home.error}: tường lửa của web chặn công cụ tự động — quét từ máy khác cũng bị). Tick tính năng tay ở mục 2, hoặc nhờ quản trị web cho phép "MBWS-QuoteBot".`;
     else if (netBlock) homeFail = `Web mẫu từ chối kết nối từ máy chủ quét (${(home.error_raw || home.error).match(NET_BLOCK)?.[0] || 'mất kết nối'}) — thường do web chặn IP máy chủ đám mây / nước ngoài. Quét bằng bản chạy trên máy (mạng Việt Nam), hoặc tick tính năng tay.`;
-    else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}. Web mẫu quá nặng cho máy chủ đám mây — quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
+    else if (home?.error && /quá tải/.test(home.error)) homeFail = `Không mở được trang chủ: ${home.error}. Quét bằng bản chạy trên máy, hoặc tick tính năng tay.`;
+    else if (home?.error && /ERR_CERT_|ERR_SSL_|certificate/i.test(home.error_raw || home.error)) homeFail = `Chứng chỉ bảo mật (SSL) của web mẫu bị lỗi (${(home.error_raw || home.error).match(/ERR_[A-Z_]+/)?.[0] || 'chứng chỉ'}) — trình duyệt của khách cũng sẽ báo "không an toàn". Kiểm tra lại địa chỉ web với khách, hoặc tick tính năng tay.`;
+    else if (home?.error) homeFail = `Không mở được trang chủ: ${home.error}. Thử "Quét lại", kiểm tra địa chỉ web, hoặc tick tính năng tay.`;
     if (homeFail) {
       // loại chặn có thể do IP máy quét (nước ngoài / máy chủ đám mây) → bên gọi có thể chuyển cho bộ quét đặt tại Việt Nam
       result.block_kind = netBlock ? 'net' : denied ? 'denied' : home?.blocked ? 'wall' : null;
