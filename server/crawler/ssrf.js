@@ -88,7 +88,7 @@ export async function assertPublicUrl(url) {
 }
 
 /** fetch an toàn: tự xử lý chuyển hướng và kiểm tra lại đích sau mỗi lần chuyển. */
-export async function safeFetchText(url, { timeoutMs = 10000, maxBytes = 2_000_000, maxRedirects = 5, userAgent } = {}) {
+export async function safeFetchText(url, { timeoutMs = 10000, maxBytes = 2_000_000, maxRedirects = 5, userAgent, htmlOnly = false } = {}) {
   let current = url;
   for (let i = 0; i <= maxRedirects; i++) {
     await assertPublicUrl(current);
@@ -97,6 +97,9 @@ export async function safeFetchText(url, { timeoutMs = 10000, maxBytes = 2_000_0
     try {
       const res = await fetch(current, { redirect: 'manual', signal: ctrl.signal, headers: { 'user-agent': userAgent || 'MBWS-QuoteBot/0.1' } });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { current = new URL(res.headers.get('location'), current).toString(); continue; }
+      const type = res.headers.get('content-type') || '';
+      // htmlOnly: tệp không phải trang (PDF, ảnh, tệp nén…) → không tải nội dung
+      if (htmlOnly && type && !/html|xml/i.test(type)) { try { await res.body?.cancel(); } catch { /* bỏ qua */ } return { status: res.status, url: current, text: '', type, bytes: 0 }; }
       const reader = res.body?.getReader();
       let size = 0; const chunks = [];
       if (reader) {
@@ -108,8 +111,33 @@ export async function safeFetchText(url, { timeoutMs = 10000, maxBytes = 2_000_0
           chunks.push(value);
         }
       }
-      return { status: res.status, url: current, text: Buffer.concat(chunks).toString('utf8') };
+      return { status: res.status, url: current, text: Buffer.concat(chunks).toString('utf8'), type, bytes: size };
     } finally { clearTimeout(t); }
   }
   throw new Error('Quá nhiều chuyển hướng');
+}
+
+/** Kích thước tệp (byte) theo máy chủ báo, không tải cả tệp: HEAD, máy chủ không hỗ trợ thì GET 1 byte (Range). null = không biết. */
+export async function safeHeadSize(url, { timeoutMs = 8000, maxRedirects = 5, userAgent } = {}) {
+  const headers = { 'user-agent': userAgent || 'MBWS-QuoteBot/0.1' };
+  const go = async (method, extra = {}) => {
+    let current = url;
+    for (let i = 0; i <= maxRedirects; i++) {
+      await assertPublicUrl(current);
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(current, { method, redirect: 'manual', signal: ctrl.signal, headers: { ...headers, ...extra } });
+        if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { current = new URL(res.headers.get('location'), current).toString(); continue; }
+        try { await res.body?.cancel(); } catch { /* bỏ qua */ }
+        const total = Number((res.headers.get('content-range') || '').split('/')[1]);
+        if (res.status === 206 && total > 0) return total;
+        const len = Number(res.headers.get('content-length'));
+        return res.ok && len > 1 ? len : null; // GET 1 byte mà máy chủ bỏ qua Range → content-length là cả tệp
+      } finally { clearTimeout(t); }
+    }
+    return null;
+  };
+  const n = await go('HEAD').catch(() => null);
+  return n || go('GET', { range: 'bytes=0-0' }).catch(() => null);
 }

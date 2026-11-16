@@ -332,7 +332,13 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
     result.templates = groups.map((g) => ({ template: g.template, kind: g.kind, url_count: g.urls.length, examples: g.urls.slice(0, 5) }));
     for (const s of sampleUrls(groups, MAX_URLS, 2)) {
       if (visited.size >= MAX_URLS || timeLeft() < 15000) break;
-      await visit(s.url, s.template, s.kind);
+      const resPage = await visit(s.url, s.template, s.kind);
+      // Nếu trang mẫu bị lỗi (404/500), thử 1 URL khác trong nhóm để không bỏ lỡ cả nhóm mẫu trang
+      if (resPage?.error && visited.size < MAX_URLS && timeLeft() > 15000) {
+        const grp = groups.find((g) => g.template === s.template);
+        const alt = grp?.urls?.find((u) => !visited.has(u.replace(/^(https?:\/\/)www\./, '$1')));
+        if (alt) await visit(alt, s.template, s.kind);
+      }
     }
   } finally {
     await browser.close().catch(() => {});

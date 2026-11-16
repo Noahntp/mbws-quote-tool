@@ -39,8 +39,9 @@ export function detectInPage() {
     .find((e) => isReal(e) && !NOT_BUY.test(label(e))); // class kiểu giỏ hàng nhưng chữ "Liên hệ báo giá" = nút xin báo giá
   const cartBtn = buttons.find((e) => /(thêm vào giỏ|cho vào giỏ|add to (cart|bag|basket)|giỏ hàng của bạn)/i.test(label(e)));
   const cartLink = findLink((l) => same(l) && /(^|\/)(gio-hang|cart|checkout|thanh-toan|basket)(\/|$|\?|\.)/.test(l.u.pathname.toLowerCase()));
-  const BUY = /^(mua ngay|mua hàng|chọn mua|đặt hàng|đặt mua|buy now|order now)$/i;
-  const buyBtns = qa('button, a, [role=button], div, span').filter((e) => isReal(e) && e.children.length <= 2 && BUY.test(label(e)));
+  const BUY = /(^|\b)(mua ngay|mua hàng|chọn mua|đặt hàng|đặt mua|buy now|order now|hotline đặt hàng|liên hệ đặt hàng)(\b|$)/i;
+  const NOT_ACTION = /(hướng dẫn|chính sách|quy định|điều khoản|cẩm nang|faq|tin tức|bài viết)/i;
+  const buyBtns = qa('button, a, [role=button], div, span').filter((e) => isReal(e) && e.children.length <= 2 && label(e).length <= 50 && BUY.test(label(e)) && !NOT_ACTION.test(label(e)));
   const orderLink = findLink((l) => /^(delivery|order|dat-?mon|giao-?hang|shop)\./.test(l.host) || /^(delivery|order online|đặt món|giao hàng|đặt món online)$/i.test(l.text));
   const priceCount = ((document.body?.innerText || '').match(/\d{1,3}(?:[.,]\d{3})+\s?(?:₫|đồng|vnđ|vnd|đ(?![a-zà-ỹ]))/gi) || []).length;
   if (addToCart) add('CART', `Nút thêm vào giỏ: "${short(label(addToCart) || addToCart.className)}"`);
@@ -175,7 +176,21 @@ export function detectInPage() {
 
   // Gợi ý loại trang (để đếm sản phẩm khi URL không có chữ "san-pham")
   const hasCart = !!(addToCart || cartBtn);
-  const pageKind = productSchema && hasCart ? 'product_detail' : hasCart && priceMatches.length >= 1 && priceMatches.length <= 4 ? 'product_detail' : priceMatches.length >= 6 ? 'product_list' : null;
+  const hasBuyAction = !!(hasCart || buyBtns.length > 0);
+  const isListUrl = /(^|\/)(san-pham|products?|shop|danh-muc|category|collections?)(\/|$)/i.test(location.pathname) && (location.pathname.endsWith('/') || !/\.[a-z0-9]+$/i.test(location.pathname));
+  const h1El = qa('h1').find((h) => isReal(h) && label(h).length > 2);
+  const isSingleProductTitle = h1El && !/(trang chủ|sản phẩm|tin tức|giới thiệu|liên hệ|dịch vụ|home|shop|products?|category|news|blog)/i.test(label(h1El));
+
+  let pageKind = null;
+  if (productSchema) {
+    pageKind = 'product_detail';
+  } else if (hasBuyAction && isSingleProductTitle && !isListUrl) {
+    pageKind = 'product_detail';
+  } else if (hasCart && priceMatches.length >= 1 && priceMatches.length <= 4 && !isListUrl) {
+    pageKind = 'product_detail';
+  } else if (priceMatches.length >= 6 || (isListUrl && priceMatches.length >= 2)) {
+    pageKind = 'product_list';
+  }
 
   // ---------- Độ phức tạp giao diện (để đánh giá mức may đo M1–M8) ----------
   const allEls = document.getElementsByTagName('*');

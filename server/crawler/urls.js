@@ -68,8 +68,8 @@ const FLAT_SUFFIX = { sp: 'product:detail', p: 'product:detail', pro: 'product:d
 /** Phân loại mẫu trang theo đường dẫn. Trả về {kind, template}. */
 export function classify(url) {
   const u = new URL(url);
-  // phân trang (/page/2, /page-20, /trang-3) cùng mẫu với trang danh sách gốc
-  const path = u.pathname.replace(/\/?&(page|p|trang)=\d+$/i, '').replace(/\/(page|trang)[-/]?\d+\/?$/i, '') || '/';
+  // phân trang (/page/2, /page-20, /trang-3) và bản in/chia sẻ (/in, /print, /tw) cùng mẫu với trang danh sách gốc
+  const path = u.pathname.replace(/\/?&(page|p|trang)=\d+$/i, '').replace(/\/(page|trang)[-/]?\d+\/?$/i, '').replace(/\/(in|print|tw|fb)\/?$/i, '') || '/';
   // đường dẫn rác của CMS cũ (thực thể HTML bị mã hóa sai: amp%3B…) / điểm gọi xử lý (?file=save) → không phải trang
   if (/amp(%3B|;)|[?&]file=save\b/i.test(u.search)) return { kind: 'junk', template: 'junk' };
   const flat = path.match(/^\/[^/]+-\d+-([a-z]{1,4})\.html?$/i);
