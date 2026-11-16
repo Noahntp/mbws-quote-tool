@@ -115,18 +115,22 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   log('robots', result.robots.status);
   // sitemap
   try {
-    const candidates = robots?.sitemaps?.length ? robots.sitemaps.slice(0, 3) : [`${root.origin}/sitemap.xml`, `${root.origin}/sitemap_index.xml`];
+    const candidates = robots?.sitemaps?.length ? robots.sitemaps.slice(0, 5) : [`${root.origin}/sitemap.xml`, `${root.origin}/sitemap_index.xml`, `${root.origin}/wp-sitemap.xml`];
     let fetched = 0; const queue = [...candidates];
     let childSitemaps = 0; let urlsetCount = 0; let urlsetLocs = 0; // để ước lượng quy mô thật
-    while (queue.length && fetched < 8 && timeLeft() > 60000) {
+    while (queue.length && fetched < 12 && timeLeft() > 50000) {
       const sm = queue.shift();
       if (!sameSite(sm, rootHost)) continue;
       const r = await safeFetchText(sm, { userAgent: UA_TOKEN, maxBytes: 5_000_000 }).catch(() => null);
       fetched++;
       if (!r || r.status !== 200 || !/<(urlset|sitemapindex)/i.test(r.text)) continue;
       const locs = [...r.text.matchAll(/<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]]+?)\s*(?:\]\]>)?\s*<\/loc>/gi)].map((m) => m[1].trim());
-      if (/<sitemapindex/i.test(r.text)) { childSitemaps += locs.length; queue.push(...locs.slice(0, 6)); }
-      else {
+      if (/<sitemapindex/i.test(r.text)) {
+        childSitemaps += locs.length;
+        const prio = (u) => (/product|san-?pham|sanpham/i.test(u) ? 3 : /post|bai-?viet|tin-?tuc|news|blog|article/i.test(u) ? 2 : 1);
+        const sorted = [...locs].sort((a, b) => prio(b) - prio(a));
+        queue.push(...sorted.slice(0, 10));
+      } else {
         urlsetCount++; urlsetLocs += locs.length;
         const name = sm.split('/').pop().toLowerCase(); locs.forEach((l) => { const k = addUrl(l); if (k) sitemapOf.set(k, name); });
       }
@@ -349,9 +353,10 @@ fs.mkdirSync(cfg.assetDir, { recursive: true });
   const lay = clusterLayouts(result.pages);
   const unsampled = result.templates.filter((t) => !t.sampled && !['policy', 'search', 'account', 'cart', 'junk'].includes(t.kind) && !(t.kind === 'other' && t.url_count < 2));
   result.layouts = { count: lay.length + unsampled.length, groups: lay, unsampled: unsampled.map((t) => t.template) };
-  const smCount = (re) => [...sitemapOf.values()].filter((n) => re.test(n)).length;
-  result.sitemap.product_urls = smCount(/product|san-?pham|sanpham/);
-  result.sitemap.post_urls = smCount(/post|bai-?viet|tin-?tuc|news|blog|article/);
+  const isSmProduct = (url, name) => /product|san-?pham|sanpham/i.test(name) || classify(url).kind === 'product' || classify(url).template === 'product:detail';
+  const isSmPost = (url, name) => /post|bai-?viet|tin-?tuc|news|blog|article/i.test(name) || classify(url).kind === 'blog' || classify(url).template === 'blog:detail';
+  result.sitemap.product_urls = [...sitemapOf.entries()].filter(([url, name]) => isSmProduct(url, name)).length;
+  result.sitemap.post_urls = [...sitemapOf.entries()].filter(([url, name]) => isSmPost(url, name)).length;
   result.coverage = {
     discovered: result.discovered.length + seenOnly.length,
     robots_seen_only: seenOnly.length,
