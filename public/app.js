@@ -152,9 +152,10 @@ async function openProject(id, keepScroll, fromPoll) {
   restoreUi(ui);
   if (keepScroll) window.scrollTo(0, y);
   const active = S.project.runs.filter((r) => r.status === 'queued' || r.status === 'running');
-  const waitingVn = active.length && active.every((r) => /^Chờ bộ quét Việt Nam/.test(r.error || '')); // có thể chờ lâu → kiểm tra thưa hơn
+  const dp = S.project.deep; const deepActive = dp && (dp.status === 'queued' || dp.status === 'running');
+  const waitingVn = [...active, ...(deepActive ? [dp] : [])].every((r) => /^Chờ bộ quét Việt Nam/.test(r.error || '')); // có thể chờ lâu → kiểm tra thưa hơn
   clearInterval(S.poll);
-  if (active.length) S.poll = setInterval(() => openProject(id, true, true), waitingVn ? 30000 : 4000);
+  if (active.length || deepActive) S.poll = setInterval(() => openProject(id, true, true), waitingVn ? 30000 : active.length ? 4000 : 6000);
 }
 const reload = () => openProject(S.project.project.id, true);
 
@@ -289,7 +290,7 @@ function renderQuick() {
       <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : /^Chờ bộ quét Việt Nam/.test(ru.error || '') && ru.status === 'queued' ? `<span title="${esc(ru.error)}">${chip('chờ bộ quét Việt Nam — web chặn máy chủ nước ngoài', 'warn')}</span>`
           : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
         <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div>
-        ${scannerHtml()}</div>
+        ${scannerHtml()}${deepHtml(P)}</div>
       ${measureTableHtml(S.quick)}
       <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
       <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
@@ -348,8 +349,37 @@ function scannerHtml() {
 // Khối lượng web mẫu đã tự điền vào các ô số lượng (sale sửa được)
 function volumesHtml(V) {
   if (!V) return '';
-  const st = V.storage;
-  return `<p class="small muted" style="margin:6px 0 0">Tự điền từ web mẫu: ${num(V.urls, 0)} trang (${num(V.templates || 0, 0)} mẫu trang) · ~${num(V.products, 0)} sản phẩm/dịch vụ · ~${num(V.posts, 0)} bài viết${st ? ` · dự đoán <b>${num(st.gb, 1)} GB</b> lưu trữ <span title="${esc(st.how)}" style="cursor:help;text-decoration:underline dotted">(cách tính)</span>` : ''}. Sửa ô nào thì giữ số đã sửa khi quét lại.</p>`;
+  const st = V.storage; const a = V.exact ? '' : '~';
+  return `<p class="small muted" style="margin:6px 0 0">Tự điền từ web mẫu${V.exact ? ' (số sản phẩm, bài viết, dung lượng: <b>đếm đủ toàn bộ web</b>)' : ''}: ${num(V.urls, 0)} trang (${num(V.templates || 0, 0)} mẫu trang) · ${a}${num(V.products, 0)} sản phẩm/dịch vụ · ${a}${num(V.posts, 0)} bài viết${st ? ` · ${st.exact ? 'đo thật' : 'dự đoán'} <b>${num(st.gb, 1)} GB</b> lưu trữ <span title="${esc(st.how)}" style="cursor:help;text-decoration:underline dotted">(cách tính)</span>` : ''}. Sửa ô nào thì giữ số đã sửa khi quét lại.</p>`;
+}
+const fmtUtc = (s) => { const t = Date.parse(String(s || '').replace(' ', 'T') + 'Z'); return Number.isFinite(t) ? new Date(t).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' }) : ''; };
+const DEEP_VIA = { wp: 'lớp trang WordPress', schema: 'dữ liệu cấu trúc (schema / Open Graph)', layout: 'khối chi tiết sản phẩm', date: 'ngày đăng bài', url: 'đường dẫn', cart: 'nút mua + giá' };
+// "Đếm chính xác": đi hết web mẫu để đếm thật sản phẩm / bài viết / dung lượng ảnh (chạy riêng với lượt quét nhanh)
+function deepHtml(P) {
+  if (!P.refs.length) return '';
+  const d = P.deep; const sc = S.meta?.scanner;
+  const btn = (label) => (can('survey.run') ? `<button class="link small" data-act="deepScan">${label}</button>` : '');
+  const mb = (b) => num(Number(b || 0) / 1048576, 0) + ' MB';
+  let body;
+  if (!d) body = `${btn('🔎 Đếm chính xác (đọc toàn bộ web)')} <span class="muted">— đếm thật số sản phẩm, bài viết, dung lượng ảnh; 1–30 phút tuỳ web</span>`;
+  else if (d.status === 'queued' || d.status === 'running') {
+    const g = d.progress || {};
+    const waitVn = /^Chờ bộ quét Việt Nam/.test(d.error || '');
+    const step = g.phase === 'images' ? `đo dung lượng ảnh ${num(g.img_done || 0, 0)}/${num(g.images || 0, 0)}` : g.phase === 'crawl' ? `đã đọc ${num(g.pages || 0, 0)} trang, còn ${num(g.queued || 0, 0)} trang chờ` : 'đọc sitemap';
+    body = `<span title="${esc(d.error || '')}">${chip(waitVn ? 'chờ bộ quét Việt Nam' : 'đang đếm toàn bộ web…', 'warn')}</span> ${esc(step)} · ${num(g.products || 0, 0)} sản phẩm · ${num(g.posts || 0, 0)} bài viết${can('survey.run') ? ` <button class="link small" data-act="deepStop" data-id="${d.id}">Dừng</button>` : ''}
+      ${sc && !sc.local && !sc.worker?.alive && !waitVn ? `<div class="muted">Máy chủ Vercel đếm từng chặng ~3 phút: giữ trang này mở để đếm tiếp (hoặc bật bộ quét Việt Nam).</div>` : ''}`;
+  } else if (d.status === 'failed') body = `<span title="${esc(d.error || '')}">${chip('đếm toàn bộ lỗi: ' + (d.error || '').slice(0, 120), 'err')}</span> ${btn('Đếm lại')}`;
+  else {
+    const r = d.result || {};
+    const st = P.project.pricing?.volumes_exact?.storage;
+    const reqQ = (f) => Number(P.requirements.find((x) => x.feature === f && x.decision === 'include')?.quantity ?? NaN);
+    const differs = (r.products > 0 && reqQ('DATA_PRODUCTS') !== r.products) || (r.posts > 0 && reqQ('DATA_POSTS') !== r.posts) || (st && reqQ('HOSTING_STORAGE') !== st.gb);
+    const via = Object.entries(r.via || {}).map(([k, n]) => `${DEEP_VIA[k] || k}: ${n}`).join(', ');
+    body = `<span title="Nhận trang sản phẩm / bài viết theo ${esc(via)}">${chip('đã đếm đủ', 'ok')}</span> ${num(r.pages, 0)} trang · <b>${num(r.products, 0)}</b> sản phẩm/dịch vụ · <b>${num(r.posts, 0)}</b> bài viết · ${num(r.images, 0)} ảnh (${mb(r.image_bytes)})${st ? ` → hosting <b>${num(st.gb, 1)} GB</b>` : ''} <span class="muted">(${esc(fmtUtc(d.finished_at))}${r.truncated ? ' · web quá lớn, đã dừng ở giới hạn — số tối thiểu' : ''})</span>
+      ${r.js_only ? `<div class="checks"><span class="warn">Web dựng bằng JavaScript — đọc HTML không thấy nội dung, giữ số ước lượng của lượt quét.</span></div>` : ''}
+      ${differs && !r.js_only && can('requirement.edit') ? `<button class="link small" data-act="deepApply" data-id="${d.id}">Dùng số này</button>` : ''} ${btn('Đếm lại')}`;
+  }
+  return `<div class="small" style="margin-top:6px">${body}</div>`;
 }
 // So với ngân sách khách (giá đã gồm VAT): trong / vượt, gợi ý phương án vừa túi tiền
 function budgetHtml(P, r) {
@@ -911,6 +941,12 @@ const ACT = {
   designMode: run(async (el) => { await api(`/api/projects/${pid()}/quick-feature`, 'POST', { feature: 'DESIGN_LEVEL', include: el.dataset.mode === 'match' }); await reload(); }),
   rescan: run(async (el) => { await api(`/api/projects/${pid()}/survey`, 'POST', { ref_id: Number(el.dataset.id) }); toast('Đang quét lại web mẫu (1–4 phút)'); reload(); }),
   surveyAll: run(async () => { const r = await api(`/api/projects/${pid()}/survey-all`, 'POST', {}); toast(`Đã bắt đầu khảo sát ${r.queued} web`); reload(); }),
+  deepScan: run(async () => {
+    const P = S.project; const url = P.project.pricing?.volumes?.url && P.refs.some((x) => x.url === P.project.pricing.volumes.url) ? P.project.pricing.volumes.url : P.refs[0]?.url;
+    await api(`/api/projects/${pid()}/deep-scan`, 'POST', { url }); toast('Đang đếm toàn bộ web mẫu — vài phút đến vài chục phút tuỳ web'); reload();
+  }),
+  deepStop: run(async (el) => { await api(`/api/deep-scans/${el.dataset.id}/stop`, 'POST', {}); reload(); }),
+  deepApply: run(async (el) => { await api(`/api/deep-scans/${el.dataset.id}/apply`, 'POST', {}); toast('Đã điền số đếm được vào các ô'); reload(); }),
   bulkDecide: run(async (el) => {
     const d = el.dataset.d;
     if (!confirm(d === 'include' ? 'Đánh dấu LÀM cho tất cả yêu cầu đang chờ / hỏi lại?' : 'Đánh dấu BỎ cho tất cả yêu cầu đang chờ / hỏi lại?')) return;

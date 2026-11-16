@@ -123,6 +123,8 @@ Mở công cụ trên Vercel, vào một hồ sơ bất kỳ. Ở mục **1. Kh�
 
 Bấm **Quét lại** một web mẫu. Log của bộ quét sẽ hiện các dòng `[quét] bắt đầu …` và `[quét] xong …`.
 
+Bấm **🔎 Đếm chính xác (đọc toàn bộ web)**: log hiện `[đếm đủ #…] bắt đầu …` rồi `[đếm đủ #…] xong: … trang, … sản phẩm, … bài viết, … ảnh`.
+
 ## 5. Cập nhật khi có phiên bản mới
 
 ```bash
@@ -136,6 +138,7 @@ sudo systemctl restart mbws-scan     # VPS; trên Windows: đóng cửa sổ r�
 ## Ghi chú
 
 - Mỗi lần bộ quét chỉ quét một web. Có thể chạy nhiều bộ quét trên nhiều máy: lượt quét được nhận một cách độc quyền nên không bị quét trùng.
+- **Đếm chính xác** chạy song song với lượt quét nhanh (chỉ tải HTML, không mở trình duyệt): đi hết các trang trong cùng web mẫu (theo liên kết, phân trang, sitemap), đếm sản phẩm / bài viết theo nội dung trang và đọc kích thước file ảnh từ máy chủ. Chạy theo chặng ~3 phút, lưu tiến độ vào cơ sở dữ liệu: tắt bộ quét giữa chừng thì lần sau đếm tiếp. Giới hạn 5.000 trang, 10.000 ảnh, 45 phút / web. Khi bộ quét tắt, Vercel đếm thay từng chặng trong lúc trang hồ sơ đang mở.
 - Bộ quét tự xưng là `MBWS-QuoteBot` và tôn trọng `robots.txt`. Nó không vượt captcha hay cơ chế chặn của web.
 - Biến tùy chọn:
   - `SCAN_WORKER_POLL_MS`: khoảng thời gian chờ giữa hai lần kiểm tra hàng đợi, mặc định 3000 ms.
