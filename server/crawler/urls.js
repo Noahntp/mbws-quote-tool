@@ -14,7 +14,7 @@ export function normalizeUrl(raw, base) {
   if ((u.protocol === 'https:' && u.port === '443') || (u.protocol === 'http:' && u.port === '80')) u.port = '';
   const params = [...u.searchParams.entries()].filter(([k]) => !TRACKING.test(k)).sort(([a], [b]) => a.localeCompare(b));
   u.search = params.length ? '?' + new URLSearchParams(params).toString() : '';
-  if (u.pathname.length > 1 && u.pathname.endsWith('/')) u.pathname = u.pathname.replace(/\/+$/, '');
+  // giữ nguyên dấu / cuối: nhiều máy chủ coi /san-pham/ và /san-pham là hai trang khác nhau (/san-pham → 404)
   return u.toString();
 }
 
@@ -42,7 +42,8 @@ export function dedupeKey(url) {
   const u = new URL(url);
   const params = [...u.searchParams.entries()].filter(([k]) => !PAGINATION_PARAMS.test(k));
   u.search = params.length ? '?' + new URLSearchParams(params).toString() : '';
-  u.pathname = u.pathname.replace(/\/page\/\d+$/i, '').replace(/\/trang-\d+$/i, '') || '/';
+  u.pathname = u.pathname.replace(/\/?&(page|p|trang)=\d+$/i, '').replace(/\/page\/\d+\/?$/i, '').replace(/\/trang-\d+\/?$/i, '') || '/';
+  if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, ''); // /a/ và /a là một khi so trùng
   return u.toString();
 }
 
@@ -68,7 +69,7 @@ const FLAT_SUFFIX = { sp: 'product:detail', p: 'product:detail', pro: 'product:d
 export function classify(url) {
   const u = new URL(url);
   // phân trang (/page/2, /page-20, /trang-3) cùng mẫu với trang danh sách gốc
-  const path = u.pathname.replace(/\/(page|trang)[-/]?\d+\/?$/i, '') || '/';
+  const path = u.pathname.replace(/\/?&(page|p|trang)=\d+$/i, '').replace(/\/(page|trang)[-/]?\d+\/?$/i, '') || '/';
   // đường dẫn rác của CMS cũ (thực thể HTML bị mã hóa sai: amp%3B…) / điểm gọi xử lý (?file=save) → không phải trang
   if (/amp(%3B|;)|[?&]file=save\b/i.test(u.search)) return { kind: 'junk', template: 'junk' };
   const flat = path.match(/^\/[^/]+-\d+-([a-z]{1,4})\.html?$/i);

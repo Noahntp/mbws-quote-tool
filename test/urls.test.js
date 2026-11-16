@@ -4,7 +4,8 @@ import { normalizeDomain, domainOf, normalizeUrl, normalizeInput, dedupeKey, cla
 import { isPublicIp } from '../server/crawler/ssrf.js';
 
 test('chuẩn hóa URL: bỏ tham số theo dõi, hash, dấu / cuối', () => {
-  assert.equal(normalizeUrl('https://Shop.VN/san-pham/?utm_source=fb&id=2&fbclid=x#top'), 'https://shop.vn/san-pham?id=2');
+  assert.equal(normalizeUrl('https://Shop.VN/san-pham/?utm_source=fb&id=2&fbclid=x#top'), 'https://shop.vn/san-pham/?id=2'); // giữ / cuối để mở đúng trang
+  assert.equal(dedupeKey('https://shop.vn/san-pham/'), dedupeKey('https://shop.vn/san-pham')); // nhưng so trùng thì là một
   assert.equal(normalizeInput('shop.vn'), 'https://shop.vn/');
   assert.equal(normalizeUrl('javascript:alert(1)'), null);
   assert.equal(normalizeUrl('ftp://shop.vn/a'), null);
