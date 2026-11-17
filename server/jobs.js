@@ -256,8 +256,10 @@ export async function ingest(job, res) {
     const wpPostGroup = (t) => isWp && t.template === 'other:d1' && (t.examples || []).length > 0 && (t.examples || []).filter(wpPostSlug).length * 2 >= (t.examples || []).length;
     const isArticleSlug = (u) => { try { const pth = new URL(u).pathname.replace(/\.html?$/i, '').replace(/\/$/, ''); return (pth.match(/-/g) || []).length >= 4; } catch { return false; } };
     const articleGroup = (t) => ['other:d1', 'other:d1:html'].includes(t.template) && !t.detected && (t.examples || []).length > 0 && (t.examples || []).filter(isArticleSlug).length * 2 >= (t.examples || []).length;
-    const isProdDetailGroup = (t) => t.template === 'other:d2:html' && (t.detected === 'product_detail' || (t.detected !== 'product_list' && (t.examples || []).length >= 3));
-    const tplKey = (t) => (t.detected === 'product_detail' || isProdDetailGroup(t) ? 'product:detail' : t.detected === 'product_list' && t.kind === 'other' ? 'product:list' : (wpPostGroup(t) || articleGroup(t)) ? 'blog:detail' : t.template);
+    const isProdDetailGroup = (t) => ['other:d2:html', 'other:d2'].includes(t.template) && (t.detected === 'product_detail' || (t.detected !== 'product_list' && (t.examples || []).length >= 3));
+    const isCategoryGroup = (t) => t.template === 'other:d1' && (t.examples || []).length > 0 && (t.examples || []).every((u) => u.endsWith('/') || !/\.[a-z0-9]+$/i.test(u));
+    const isPostInBlog = (t) => t.kind === 'recruit' && (t.examples || []).some((u) => /\/(tin-tuc|blogs?|news)\//i.test(u));
+    const tplKey = (t) => (t.detected === 'product_detail' || isProdDetailGroup(t) ? 'product:detail' : (t.detected === 'product_list' || isCategoryGroup(t)) ? 'product:list' : (wpPostGroup(t) || articleGroup(t) || isPostInBlog(t)) ? 'blog:detail' : t.template);
     // trang lẻ không rõ loại (nhóm "other" chỉ 1 URL) dùng chung mẫu trang nội dung → không tính thành mẫu trang riêng
     const oneOff = (t) => t.kind === 'other' && !t.detected && (t.url_count || 0) < 2;
     const distinct = new Set(tpl.filter((t) => !['policy', 'search', 'account', 'cart', 'junk'].includes(t.kind) && !oneOff(t)).map(tplKey));
