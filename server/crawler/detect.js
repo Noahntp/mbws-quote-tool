@@ -38,8 +38,14 @@ export function detectInPage() {
     const href = (e.getAttribute('href') || '').toLowerCase();
     if (/^(tel:|mailto:|sms:)/i.test(href) || href.includes('zalo.me')) return true;
     const txt = label(e);
-    if (/(hotline|gọi điện|tổng đài|liên hệ|tư vấn|báo giá|\b0\d{8,10}\b)/i.test(txt)) return true;
+    if (/(hotline|gọi|tổng đài|liên hệ|tư vấn|báo giá|call|zalo|sđt|đt|\b0[0-9\s.-]{8,14}\b)/i.test(txt)) return true;
+    if (e.closest('[class*="hotline" i], [class*="contact" i], [class*="call" i], [class*="phone" i], [class*="support" i], [id*="support" i], [class*="online" i], [id*="online" i]')) return true;
     return false;
+  };
+  const isInfoLink = (e) => {
+    if (e.tagName !== 'A') return false;
+    const href = (e.getAttribute('href') || '').toLowerCase();
+    return /(quy-trinh|quy-che|chinh-sach|huong-dan|dieu-khoan|gioi-thieu|tin-tuc|lien-he|bao-mat|thanh-toan)/.test(href);
   };
   const NOT_BUY = /(liên hệ|báo giá|xem thêm|xem chi tiết|tư vấn|đăng ký|hotline|contact|quote|enquir|inquir|read more|learn more|details)/i;
   const addToCart = qa('button[name="add-to-cart"], .add_to_cart_button, .single_add_to_cart_button, form[action*="/cart" i] button, [data-action*="add-to-cart" i], [data-action*="addtocart" i], [class*="add-to-cart" i], [id*="add-to-cart" i], [class*="addtocart" i], [class*="btn-cart" i]')
@@ -47,8 +53,9 @@ export function detectInPage() {
   const cartBtn = buttons.find((e) => /(thêm vào giỏ|cho vào giỏ|add to (cart|bag|basket)|giỏ hàng của bạn)/i.test(label(e)) && !isCallOrContact(e));
   const cartLink = findLink((l) => same(l) && /(^|\/)(gio-hang|cart|checkout|thanh-toan|basket)(\/|$|\?|\.)/.test(l.u.pathname.toLowerCase()));
   const BUY = /(^|\b)(mua ngay|mua hàng|chọn mua|đặt mua|buy now|order now|thêm vào giỏ|đặt hàng)(\b|$)/i;
-  const NOT_ACTION = /(hướng dẫn|chính sách|quy định|điều khoản|cẩm nang|faq|tin tức|bài viết)/i;
-  const buyBtns = qa('button, a, [role=button], div, span').filter((e) => isReal(e) && e.children.length <= 2 && label(e).length <= 50 && BUY.test(label(e)) && !NOT_ACTION.test(label(e)) && !isCallOrContact(e));
+  const NOT_ACTION = /(quy trình|quy chế|hướng dẫn|chính sách|quy định|điều khoản|cẩm nang|faq|tin tức|bài viết|liên hệ|giới thiệu|bảo mật|thanh toán)/i;
+  const buyCandidates = qa('button, a, input[type=submit], input[type=button], [role=button], div.btn, div[class*="btn" i], div[class*="button" i], span[class*="btn" i]');
+  const buyBtns = buyCandidates.filter((e) => isReal(e) && label(e).length <= 50 && BUY.test(label(e)) && !NOT_ACTION.test(label(e)) && !isCallOrContact(e) && !isInfoLink(e) && !(e.tagName !== 'A' && e.closest('a')));
   const orderLink = findLink((l) => /^(delivery|order|dat-?mon|giao-?hang|shop)\./.test(l.host) || /^(delivery|order online|đặt món|giao hàng|đặt món online)$/i.test(l.text));
   const priceCount = ((document.body?.innerText || '').match(/\d{1,3}(?:[.,]\d{3})+\s?(?:₫|đồng|vnđ|vnd|đ(?![a-zà-ỹ]))/gi) || []).length;
   if (addToCart) add('CART', `Nút thêm vào giỏ: "${short(label(addToCart) || addToCart.className)}"`);
@@ -182,6 +189,8 @@ export function detectInPage() {
   if (market) add('OMNI_SYNC', `Liên kết sàn: ${market.host}`, 'inferred');
 
   // Gợi ý loại trang (để đếm sản phẩm khi URL không có chữ "san-pham")
+  const isHomePage = location.pathname === '/' || /^\/(index\.(html?|php))?$/i.test(location.pathname);
+  const isInfoPage = /(^|\/)(gioi-thieu|about|lien-he|contact|chinh-sach|policy|dieu-khoan|huong-dan|quy-trinh|quy-che|tuyen-dung|career|tin-tuc|blog|news)(\/|$|\.)/i.test(location.pathname);
   const hasCart = !!(addToCart || cartBtn);
   const hasBuyAction = !!(hasCart || buyBtns.length > 0);
   const isListUrl = /(^|\/)(san-pham|products?|shop|danh-muc|category|collections?)(\/|$)/i.test(location.pathname) && (location.pathname.endsWith('/') || !/\.[a-z0-9]+$/i.test(location.pathname));
@@ -189,14 +198,18 @@ export function detectInPage() {
   const isSingleProductTitle = h1El && !/(trang chủ|sản phẩm|tin tức|giới thiệu|liên hệ|dịch vụ|home|shop|products?|category|news|blog)/i.test(label(h1El));
 
   let pageKind = null;
-  if (productSchema) {
-    pageKind = 'product_detail';
-  } else if (hasBuyAction && isSingleProductTitle && !isListUrl) {
-    pageKind = 'product_detail';
-  } else if (hasCart && priceMatches.length >= 1 && priceMatches.length <= 4 && !isListUrl) {
-    pageKind = 'product_detail';
-  } else if (priceMatches.length >= 6 || (isListUrl && priceMatches.length >= 2)) {
-    pageKind = 'product_list';
+  if (isHomePage) {
+    pageKind = priceMatches.length >= 6 ? 'product_list' : null;
+  } else if (!isInfoPage) {
+    if (productSchema) {
+      pageKind = 'product_detail';
+    } else if (hasBuyAction && isSingleProductTitle && !isListUrl) {
+      pageKind = 'product_detail';
+    } else if (hasCart && priceMatches.length >= 1 && priceMatches.length <= 4 && !isListUrl) {
+      pageKind = 'product_detail';
+    } else if (priceMatches.length >= 6 || (isListUrl && priceMatches.length >= 2)) {
+      pageKind = 'product_list';
+    }
   }
 
   // ---------- Độ phức tạp giao diện (để đánh giá mức may đo M1–M8) ----------

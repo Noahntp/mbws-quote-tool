@@ -9,6 +9,10 @@ test('chuẩn hóa URL: bỏ tham số theo dõi, hash, dấu / cuối', () => {
   assert.equal(normalizeInput('shop.vn'), 'https://shop.vn/');
   assert.equal(normalizeUrl('javascript:alert(1)'), null);
   assert.equal(normalizeUrl('ftp://shop.vn/a'), null);
+  assert.equal(normalizeUrl('https://shop.vn/tin-tuc/http://shop.vn/sp.html'), null); // lồng giao thức
+  assert.equal(normalizeUrl('https://shop.vn/lien-he/tw'), null); // link rác social
+  assert.equal(normalizeUrl('https://shop.vn/lien-he/in'), null); // link rác in
+  assert.equal(normalizeUrl('https://shop.vn/nuoc-uong/nuoc-uong/'), null); // lặp đoạn CMS
 });
 
 test('loại trùng phân trang & sắp xếp', () => {

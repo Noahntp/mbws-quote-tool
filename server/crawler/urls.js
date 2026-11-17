@@ -8,6 +8,12 @@ export function normalizeUrl(raw, base) {
   let u;
   try { u = new URL(String(raw).trim(), base); } catch { return null; }
   if (!['http:', 'https:'].includes(u.protocol)) return null;
+  // Bỏ URL chứa giao thức lồng nhau (do web mẫu viết link tương đối sai, VD /tin-tuc/http://...)
+  if (/[a-z0-9]+:\/\//i.test(u.pathname)) return null;
+  // Bỏ link rác icon mạng xã hội viết tắt dạng href="tw", href="in", href="fb"
+  if (/\/(in|tw|fb|print|share)\/?$/i.test(u.pathname)) return null;
+  // Bỏ vòng lặp lặp lại đoạn đường dẫn (vòng lặp CMS lỗi: /a/a/ hoặc /nuoc-khoang/nuoc-khoang/)
+  if (/(?<=\/)([^/]{3,})\/\1(?:\/|$)/i.test(u.pathname)) return null;
   u.hash = '';
   u.username = ''; u.password = '';
   u.hostname = u.hostname.toLowerCase();
