@@ -1,6 +1,6 @@
 // Giao diện công cụ báo giá — SPA thuần JS, không cần build.
 const $app = document.getElementById('app');
-const S = { users: [], me: null, meta: null, project: null, tab: 'profile', rec: null, briefSug: null, versionView: null, poll: null };
+const S = { users: [], me: null, meta: null, project: null, tab: 'profile', rec: null, briefSug: null, versionView: null, poll: null, featView: 'cat' };
 
 // ---------- tiện ích ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -82,22 +82,27 @@ function route() {
 async function viewProjects() {
   const rows = await api('/api/projects');
   $app.innerHTML = `
-  <h1>Báo giá website</h1>
-  ${can('project.edit') ? `<div class="panel">
-    <h3 style="margin-top:0">Báo giá theo web mẫu</h3>
-    <div class="row" style="gap:8px">
-      <input id="np_domain" placeholder="Nhập tên miền web mẫu, ví dụ: bachhoaxanh.com" autocomplete="off" style="flex:1;min-width:240px;font-size:16px;padding:10px 12px">
-      <button class="primary" data-act="createProject" style="padding:10px 20px;font-size:15px">Quét & báo giá</button>
+  <div class="row" style="justify-content:space-between;align-items:baseline">
+    <div>
+      <h1 style="margin-bottom:2px">Báo giá Website Mắt Bão WS</h1>
+      <p class="muted small" style="margin:0 0 12px">Khảo sát web mẫu & tính giá tự động các gói ZERO (tiết kiệm) và HERO (may đo theo yêu cầu).</p>
     </div>
-    <p class="small muted" style="margin:6px 0 0">Chỉ cần tên miền — hệ thống tự quét web, chọn sẵn tính năng và ra giá theo gói (1–4 phút).</p>
+  </div>
+  ${can('project.edit') ? `<div class="panel" style="border-color:var(--accent);box-shadow:0 2px 8px rgba(0,0,0,.04)">
+    <h3 style="margin-top:0">⚡ Báo giá nhanh theo web mẫu</h3>
+    <div class="row" style="gap:8px">
+      <input id="np_domain" placeholder="Nhập tên miền web mẫu hoặc web của khách (vd: tuongnguyenwater.com)" autocomplete="off" style="flex:1;min-width:260px;font-size:15px;padding:10px 14px">
+      <button class="primary" data-act="createProject" style="padding:10px 22px;font-size:15px;white-space:nowrap">🔍 Quét & báo giá</button>
+    </div>
+    <p class="small muted" style="margin:6px 0 0">💡 Chỉ cần tên miền — hệ thống tự động bóc tách quy mô, nhận diện tính năng và tính giá trọn gói (1–3 phút).</p>
     <details style="margin-top:8px"><summary class="small">Thêm tên khách / mô tả nhu cầu (không bắt buộc)</summary>
       <div class="grid2" style="margin-top:8px">
-        <label class="f">Khách hàng<input id="np_customer" placeholder="Tên khách / công ty"></label>
-        <label class="f">Khách cần gì?<input id="np_brief" placeholder="Ví dụ: đặt bàn online, 2 ngôn ngữ"></label>
+        <label class="f">Khách hàng<input id="np_customer" placeholder="Tên khách hàng / công ty"></label>
+        <label class="f">Khách cần gì?<input id="np_brief" placeholder="Ví dụ: bán nước uống, đặt hàng online, 2 ngôn ngữ"></label>
       </div></details></div>` : ''}
-  <h2>Báo giá đã tạo</h2>
-  <div class="panel tablewrap"><table><thead><tr><th>Mã</th><th>Dự án</th><th>Khách hàng</th><th>Phụ trách</th><th>Trạng thái</th><th class="n">Giá dự kiến</th><th>Cập nhật</th></tr></thead><tbody>
-  ${rows.map((p) => `<tr><td><a href="#/p/${p.id}">${esc(p.code)}</a></td><td><a href="#/p/${p.id}">${esc(p.name)}</a></td><td>${esc(p.customer_name || '')}</td><td>${esc(p.owner_name || '')}</td><td>${chip(p.status_label, STATUS_CHIP[p.status])}</td><td class="n">${vnd(p.price_net)}</td><td class="small muted">${esc(p.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Chưa có hồ sơ.</td></tr>'}
+  <h2>Danh sách báo giá đã tạo</h2>
+  <div class="panel tablewrap"><table><thead><tr><th>Mã hồ sơ</th><th>Dự án / Web mẫu</th><th>Khách hàng</th><th>Phụ trách</th><th>Trạng thái</th><th class="n">Giá dự kiến</th><th>Cập nhật</th></tr></thead><tbody>
+  ${rows.map((p) => `<tr><td><a href="#/p/${p.id}"><b>${esc(p.code)}</b></a></td><td><a href="#/p/${p.id}">${esc(p.name)}</a></td><td>${esc(p.customer_name || '—')}</td><td>${esc(p.owner_name || '')}</td><td>${chip(p.status_label, STATUS_CHIP[p.status])}</td><td class="n"><b>${vnd(p.price_net)}</b></td><td class="small muted">${esc(p.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Chưa có hồ sơ nào. Hãy nhập tên miền ở trên để bắt đầu!</td></tr>'}
   </tbody></table></div>`;
 }
 
@@ -190,6 +195,26 @@ const FEATURE_NOTE = {
   PAYMENT_ONLINE: 'Gói có QR BIDV miễn phí; VNPay/MoMo tính thêm',
   OMNI_SYNC: (t) => (t?.paid_until ? `+500.000 ₫ ở gói dưới ${t.paid_until}, miễn phí từ ${t.paid_until}` : ''),
 };
+const FEATURE_CATS = [
+  {
+    id: 'commerce',
+    title: '🛒 Bán hàng & Nội dung',
+    desc: 'Sản phẩm, giỏ hàng, đặt hàng, bài viết blog',
+    codes: ['PRODUCT_CATALOG', 'CART', 'BLOG', 'FILTER', 'PAYMENT_ONLINE', 'BOOKING', 'LANDING']
+  },
+  {
+    id: 'contact',
+    title: '📞 Tương tác & Tiện ích',
+    desc: 'Hotline, Zalo, chat, liên hệ, bản đồ, SEO',
+    codes: ['PHONE_CALL', 'CHAT_ZALO', 'MESSENGER', 'CONTACT_FORM', 'MAP', 'SEARCH', 'SOCIAL', 'SEO', 'ANALYTICS']
+  },
+  {
+    id: 'advanced',
+    title: '⚡ Nâng cao & Mở rộng',
+    desc: 'Đa ngôn ngữ, thành viên, vận chuyển, AI, tích hợp',
+    codes: ['MULTILANG', 'MEMBER_LOGIN', 'LOYALTY', 'TRACKING', 'SHIPPING', 'AI_ASSISTANT', 'OMNI_SYNC', 'OMNI_CONTENT', 'INTERNATIONAL', 'ERP_INTEGRATION', 'DATA_MIGRATION']
+  }
+];
 // Thứ tự gói theo giá (cùng giá thì ZERO trước HERO, giữ thứ tự trên matbao.ws)
 function packageOrder() {
   return S.meta.packages.lines.filter((l) => ['WEB_ZERO', 'WEB_HERO'].includes(l.id)).flatMap((l) => l.packages.map((p) => ({ p, l })))
@@ -221,7 +246,12 @@ function packageCapacity(code) {
   const hosting = gb(x.p.hosting) != null ? `${gb(x.p.hosting)} GB` : `~${maxGb} GB (theo dự án)`;
   return { pages, products: x.p.products, posts: x.p.posts, hosting, hosting_short: hosting.replace(/ \(theo dự án\)/, ''), sitemap: x.p.features?.[crit?.no] };
 }
-const QUICK_QTY = [['PAGES', 'Số mẫu trang'], ['DATA_PRODUCTS', 'Số sản phẩm / dịch vụ'], ['DATA_POSTS', 'Số bài viết cần nhập'], ['HOSTING_STORAGE', 'Dung lượng hosting (GB)']];
+const QUICK_QTY = [
+  ['PAGES', 'Mẫu giao diện', '📄', 'Mẫu trang thiết kế riêng'],
+  ['DATA_PRODUCTS', 'Sản phẩm / Dịch vụ', '📦', 'Số sản phẩm cần đăng'],
+  ['DATA_POSTS', 'Bài viết / Tin tức', '✍️', 'Số bài viết tin tức'],
+  ['HOSTING_STORAGE', 'Dung lượng Hosting', '💾', 'Lưu trữ web & hình ảnh']
+];
 
 function renderQuick() {
   const P = S.project; const p = P.project; const r = P.preview; const cat = S.meta.catalog;
@@ -239,16 +269,45 @@ function renderQuick() {
   const feat = (code) => {
     const f = cat.features.find((x) => x.code === code); if (!f) return '';
     const rq = reqBy[code]; const on = rq?.decision === 'include'; const c = covOf(rq);
-    const seen = rq && rq.evidence_codes.length ? (rq.source_kind === 'observed' ? chip('web mẫu có', 'ok') : chip('web mẫu có thể có', 'warn')) : '';
+    const seen = rq && rq.evidence_codes?.length ? (rq.source_kind === 'observed' ? chip('👁 Web mẫu có', 'ok') : chip('👁 Có thể có', 'warn')) : '';
     const Q = S.quick; const mg = Q?.marginal?.[code];
     const inBase = Q?.baseline && code in (Q.baseline.features || {});
     let bill = '';
     if (mg) {
-      if (!on) bill = mg.delta > 0 ? `<span title="${mg.package && mg.package !== Q.current.package ? 'Giá sẽ theo gói ' + esc(mg.package) : 'Tính thêm ngoài gói'}">${chip('+' + money(mg.delta), 'accent')}</span>` : mg.delta < 0 ? chip(money(mg.delta), 'ok') : '<span class="small muted">+0 ₫</span>';
-      else if (Q.baseline && !inBase) { const t = S.meta.feature_tiers?.[code]; bill = chip('phát sinh' + (t && !t.all ? ' · cần ' + t.code : ''), 'accent'); }
-    } else if (on && c && c.status !== 'included') bill = chip('+ tính thêm', 'accent');
+      if (!on) {
+        bill = mg.delta > 0
+          ? `<span class="chip accent" title="${mg.package && mg.package !== Q.current.package ? 'Cần lên gói ' + esc(mg.package) : 'Tính thêm ngoài gói'}">+${money(mg.delta)}</span>`
+          : '<span class="chip ok small">Đã gồm</span>';
+      } else if (Q.baseline && !inBase) {
+        const t = S.meta.feature_tiers?.[code];
+        bill = chip('Phát sinh' + (t && !t.all ? ' · ' + t.code : ''), 'accent');
+      } else {
+        bill = '<span class="chip ok small">✓ Đang chọn</span>';
+      }
+    } else if (on && c && c.status !== 'included') {
+      bill = chip('+ tính thêm', 'accent');
+    }
     const n = FEATURE_NOTE[code]; const note = typeof n === 'function' ? n(S.meta.feature_tiers?.[code]) : n;
-    return `<label class="feat"><input type="checkbox" data-qfeat="${code}" ${on ? 'checked' : ''} ${can('requirement.decide') ? '' : 'disabled'}><span>${esc(f.title)} ${seen} ${bill}${note ? `<span class="small muted" style="display:block">${esc(note)}</span>` : ''}</span></label>`;
+    return `
+      <label class="feat-item ${on ? 'on' : ''}">
+        <input type="checkbox" data-qfeat="${code}" ${on ? 'checked' : ''} ${can('requirement.decide') ? '' : 'disabled'}>
+        <div class="feat-info">
+          <div class="feat-name">${esc(f.title)}</div>
+          ${note ? `<div class="small muted feat-note">${esc(note)}</div>` : ''}
+          <div class="feat-tags">${seen} ${bill}</div>
+        </div>
+      </label>`;
+  };
+  const renderCat = (c) => {
+    const onCount = c.codes.filter((cd) => reqBy[cd]?.decision === 'include').length;
+    return `
+      <div class="feat-cat">
+        <div class="feat-cat-head">
+          <div><span class="feat-cat-title">${c.title}</span> <span class="feat-cat-desc">${c.desc}</span></div>
+          <div><span class="chip ${onCount > 0 ? 'ok' : ''}">${onCount}/${c.codes.length} đang chọn</span></div>
+        </div>
+        <div class="feat-grid">${c.codes.map(feat).join('')}</div>
+      </div>`;
   };
   const curRank = pkgCode ? packageOrder().findIndex((x) => x.p.code === pkgCode) : -1;
   const tierCard = (g) => {
@@ -263,56 +322,78 @@ function renderQuick() {
     else state = chip(nOn ? '+ tính thêm hoặc nâng gói' : 'chọn → cần nâng gói', nOn ? 'accent' : '');
     return `<div class="tier ${g.key !== 'ALL' && g.key !== 'NONE' && curRank >= 0 && g.rank > curRank ? 'above' : ''}">
       <div class="tier-head"><div><b>${title}</b><div class="small muted">${sub}</div></div><div>${state}</div></div>
-      ${g.codes.map(feat).join('')}</div>`;
+      <div class="feat-grid" style="margin-top:6px">${g.codes.map(feat).join('')}</div></div>`;
   };
   const cap = pkgCode ? packageCapacity(pkgCode) : null;
-  const qty = ([code, label]) => {
+  const qty = ([code, label, icon, desc]) => {
     const rq = reqBy[code]; const on = rq?.decision === 'include';
     const gb = code === 'HOSTING_STORAGE';
-    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : gb ? (cap?.hosting_short ? 'gói gồm ' + cap.hosting_short : 'theo gói') : 'không';
-    const c = gb && on ? covOf(rq) : null; // dung lượng vượt gói → ghi rõ phần mua thêm
-    return `<label class="f">${label}<input type="number" min="0" ${gb ? 'step="0.5"' : ''} class="num" data-qqty="${code}" style="width:130px" value="${on ? esc(rq.quantity ?? '') : ''}" placeholder="${esc(hint)}">${c && c.status !== 'included' ? `<span class="small" style="color:var(--accent)">${esc(c.note)}</span>` : ''}</label>`;
+    const hint = rq && !on && rq.quantity ? `web mẫu ~${num(rq.quantity, 0)}` : gb ? (cap?.hosting_short ? cap.hosting_short : 'theo gói') : '0';
+    const c = gb && on ? covOf(rq) : null;
+    return `
+      <div class="qty-card">
+        <div class="qty-icon">${icon}</div>
+        <div class="qty-body">
+          <div class="qty-label">${label}</div>
+          <div class="qty-input-wrap">
+            <input type="number" min="0" ${gb ? 'step="0.5"' : ''} class="num qty-input" data-qqty="${code}" value="${on ? esc(rq.quantity ?? '') : ''}" placeholder="${esc(hint)}">
+            <span class="small muted">${gb ? 'GB' : 'mục'}</span>
+          </div>
+          ${c && c.status !== 'included' ? `<div class="small" style="color:var(--accent);margin-top:2px">${esc(c.note)}</div>` : `<div class="small muted qty-desc">${desc}</div>`}
+        </div>
+      </div>`;
   };
   $app.innerHTML = `
-  <div class="row" style="justify-content:space-between">
-    <div><a href="#/" class="small">← Danh sách</a><h1 style="margin-top:4px">${esc(p.name)}</h1><div class="muted small">${esc(p.code)}</div></div>
-    <a href="#/p/${p.id}/profile" class="small">Nâng cao ▸ (bóc tách giờ công, duyệt, phiên bản)</a>
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+    <div>
+      <a href="#/" class="small">← Về danh sách hồ sơ</a>
+      <h1 style="margin:4px 0 2px">${esc(p.name)} <span class="chip" style="font-size:13px;font-weight:normal">${esc(p.code)}</span></h1>
+      <div class="muted small">${esc(p.customer_name || 'Khách hàng')} · Phụ trách: ${esc(p.owner_name || '')}</div>
+    </div>
+    <div class="row" style="gap:8px;align-items:center">
+      <a href="#/p/${p.id}/profile" class="chip" style="text-decoration:none;padding:6px 12px">⚙️ Bóc tách & Chi tiết kỹ thuật ▸</a>
+    </div>
   </div>
-  <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr);gap:14px;margin-top:12px" class="quick">
+  <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,1fr);gap:14px;margin-top:8px" class="quick">
   <div>
     <div class="panel">
-      <h3 style="margin-top:0">1. Khách & web mẫu</h3>
+      <h3 style="margin-top:0">1. Khách hàng & Web mẫu</h3>
       <div class="grid2">
-        <label class="f">Khách hàng<input data-qinfo="customer_name" value="${esc(p.customer_name || '')}"></label>
-        <label class="f">Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}"></label>
-        <label class="f">Ngân sách của khách<input data-qinfo="budget" inputmode="decimal" value="${p.budget ? esc(Number(p.budget).toLocaleString('vi-VN')) : ''}" placeholder="vd: 10tr hoặc 10.000.000"></label>
+        <label class="f">Khách hàng<input data-qinfo="customer_name" value="${esc(p.customer_name || '')}" placeholder="Tên khách hàng / doanh nghiệp"></label>
+        <label class="f">Số điện thoại / Liên hệ<input data-qinfo="customer_contact" value="${esc(p.customer_contact || '')}" placeholder="SĐT, Zalo hoặc Email"></label>
+        <label class="f">Ngân sách dự kiến của khách<input data-qinfo="budget" inputmode="decimal" value="${p.budget ? esc(Number(p.budget).toLocaleString('vi-VN')) : ''}" placeholder="vd: 10tr hoặc 10.000.000"></label>
       </div>
-      <div style="margin-top:8px">${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('đã quét', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : /^Chờ bộ quét Việt Nam/.test(ru.error || '') && ru.status === 'queued' ? `<span title="${esc(ru.error)}">${chip('chờ bộ quét Việt Nam — web chặn máy chủ nước ngoài', 'warn')}</span>`
-          : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
-        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div>
-        ${scannerHtml()}${deepHtml(P)}</div>
+      <div style="margin-top:10px">
+        <div class="small muted" style="font-weight:600;margin-bottom:4px">Website tham khảo:</div>
+        ${[...new Map(P.refs.map((x) => [x.url, x])).values()].map((x) => { const ru = runOf(x.url); return `<div class="row" style="gap:8px;margin:4px 0;align-items:center"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer"><b>${esc(x.url)}</b></a> ${!ru ? `<button class="link" data-act="surveyAll">Quét web này</button>` : ru.status === 'done' ? chip('✓ Đã quét xong', 'ok') + ` <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : /^Chờ bộ quét Việt Nam/.test(ru.error || '') && ru.status === 'queued' ? `<span title="${esc(ru.error)}">${chip('Chờ bộ quét Việt Nam (chống chặn IP)', 'warn')}</span>`
+          : ru.status === 'failed' ? `<span title="${esc(ru.error || '')}">${chip('quét lỗi: ' + (ru.error || '').slice(0, 140), 'err')}</span> <button class="link small" data-act="rescan" data-id="${x.id}">Quét lại</button>` : chip('⏳ Đang quét… (1–4 phút)', 'warn')}</div>`; }).join('')}
+        <div class="row" style="margin-top:6px"><input id="newRef" placeholder="Thêm tên miền web mẫu khác, ví dụ: abc.vn" style="flex:1"><button data-act="addRef">Thêm & quét</button></div>
+        ${scannerHtml()}${deepHtml(P)}
+      </div>
       ${measureTableHtml(S.quick)}
-      <label class="f" style="margin-top:10px">Khách cần gì?<textarea id="qBrief" placeholder="Ví dụ: 7 trang, 50 sản phẩm, giỏ hàng, chat Zalo, 2 ngôn ngữ">${esc(p.brief || '')}</textarea></label>
-      <p style="margin:6px 0 0"><button data-act="applyBrief">Đọc mô tả → chọn tính năng</button></p>
+      <label class="f" style="margin-top:10px">Yêu cầu thêm từ khách?<textarea id="qBrief" placeholder="Ví dụ: Cần 7 trang, khoảng 50 sản phẩm, có giỏ hàng, chat Zalo, đa ngôn ngữ...">${esc(p.brief || '')}</textarea></label>
+      <p style="margin:6px 0 0"><button data-act="applyBrief">🔍 Đọc mô tả → Tự chọn tính năng</button></p>
     </div>
     <div class="panel">
-      <h3 style="margin-top:0">${S.quick?.baseline ? '2. Chọn thêm tính năng (tính phát sinh)' : '2. Tính năng cần làm'}</h3>
-      ${S.quick?.baseline ? `<p class="small muted" style="margin:0 0 6px">Đã tick sẵn ${S.quick.baseline.count} tính năng thấy trên ${esc(domainLabel(S.quick.baseline.domain))}. Mỗi mục chưa chọn ghi sẵn giá cộng thêm nếu chọn.</p>` : ''}
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h3 style="margin:0">${S.quick?.baseline ? '2. Chọn tính năng & Khối lượng' : '2. Tính năng cần làm'}</h3>
+        <button class="link small" data-act="toggleFeatView">${S.featView === 'tier' ? '📁 Đổi sang xem theo nhóm chức năng' : '📦 Đổi sang xem theo cấp gói'}</button>
+      </div>
+      ${S.quick?.baseline ? `<p class="small muted" style="margin:4px 0 8px">Hệ thống đã nhận diện sẵn <b>${S.quick.baseline.count} tính năng</b> trên ${esc(domainLabel(S.quick.baseline.domain))}. Bạn có thể tick chọn thêm hoặc bỏ bớt theo nhu cầu.</p>` : ''}
       ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
-      <div class="row">${QUICK_QTY.map(qty).join('')}</div>
+      <div class="qty-grid">${QUICK_QTY.map(qty).join('')}</div>
       ${volumesHtml(S.quick?.volumes)}
-      ${cap ? `<p class="small muted" style="margin:6px 0 0">Gói <b>${esc(pkgCode)}</b> gồm: ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '')} · ${esc(cap.posts || '')} · hosting ${esc(cap.hosting || 'theo dự án')}. Vượt số sản phẩm/bài viết/dung lượng sẽ cộng phí mua thêm (gia hạn hằng năm).</p>` : ''}
-      <p class="small muted" style="margin:12px 0 6px">Tính năng xếp theo gói matbao.ws: chọn mục ở nhóm cao hơn thì giá chuyển lên gói đó (hoặc tính thêm nếu rẻ hơn).</p>
-      <div class="tiers">${featureGroups().map(tierCard).join('')}</div>
+      ${cap ? `<div class="pkg-cap-hint"><span class="chip ok small">Sức chứa gói ${esc(pkgCode)}</span> ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '0')} SP · ${esc(cap.posts || '0')} bài viết · Hosting: ${esc(cap.hosting || 'theo dự án')}. <i>Vượt sức chứa sẽ tính phí lưu trữ/nhập liệu thêm hằng năm.</i></div>` : ''}
+      ${S.featView === 'tier' ? `<div class="tiers" style="margin-top:12px">${featureGroups().map(tierCard).join('')}</div>` : `<div class="feat-categories">${FEATURE_CATS.map(renderCat).join('')}</div>`}
     </div>
   </div>
   <div>
     <div class="panel" style="position:sticky;top:64px;border-color:var(--accent)">
-      <h3 style="margin-top:0">3. Giá</h3>
+      <h3 style="margin-top:0">3. Phương án & Báo giá</h3>
       ${priceStepsHtml(P, r, pkg, running)}
       ${budgetHtml(P, r)}
       ${!included.length ? (running.length ? '' : `<p class="muted">Nhập tên miền web mẫu (hoặc tick tính năng) để ra giá.</p>`) : `
-      <details ${S.quick?.baseline ? '' : 'open'} style="margin-top:8px"><summary class="small">Chi tiết theo gói ${esc(pkg?.code || '')}</summary>
+      <details ${S.quick?.baseline ? '' : 'open'} style="margin-top:8px"><summary class="small">Chi tiết cấu thành giá gói ${esc(pkg?.code || '')} ▾</summary>
       <table style="margin-top:6px"><tbody>
         ${r.mode === 'package' ? `<tr><td>Giá gói</td><td class="n">${vnd(r.package_price)}</td></tr>` : ''}
         ${(r.addons || []).map((a) => `<tr><td>${esc(a.name)} ×${a.qty}</td><td class="n">${vnd(a.amount)}</td></tr>`).join('')}
@@ -320,15 +401,18 @@ function renderQuick() {
         ${Number(r.discount_amount) > 0 ? `<tr><td>Giảm ${r.discount_pct}%</td><td class="n">− ${vnd(r.discount_amount)}</td></tr>` : ''}
         ${(r.recurring || []).map((x) => `<tr><td class="muted">${esc(x.title)}</td><td class="n muted">${vnd(x.amount)}/${esc(x.period)}</td></tr>`).join('')}
       </tbody></table></details>
-      <div class="row" style="margin-top:8px"><label class="f" style="min-width:0">Giảm giá %<input class="num" type="number" step="0.5" min="0" data-pr="discount_pct" value="${esc(p.pricing.discount_pct || 0)}"></label>
-        <button class="primary" data-act="printQuick" ${fatal.length ? 'disabled' : ''} style="flex:1;padding:10px">🖨 In báo giá</button></div>
+      <div class="row" style="margin-top:8px;gap:8px">
+        <label class="f" style="min-width:0;max-width:110px">Giảm giá %<input class="num" type="number" step="0.5" min="0" data-pr="discount_pct" value="${esc(p.pricing.discount_pct || 0)}"></label>
+        <button class="primary" data-act="printQuick" ${fatal.length ? 'disabled' : ''} style="flex:1;padding:10px" title="In hoặc xuất PDF báo giá gửi khách">🖨 In báo giá</button>
+        <button class="secondary" data-act="copyQuote" style="padding:10px 14px" title="Sao chép tóm tắt gửi Zalo cho khách">📋 Gửi Zalo</button>
+      </div>
       ${fatal.length ? `<ul class="checks small">${fatal.map((c) => `<li class="error">⛔ ${esc(c.message)}</li>`).join('')}</ul>` : ''}
-      ${S.rec?.ranked?.length ? `<h3>Gói khác</h3><table class="small"><tbody>
+      ${S.rec?.ranked?.length ? `<details style="margin-top:12px"><summary class="small">Tham khảo các gói khác ▾</summary><table class="small" style="margin-top:6px"><tbody>
         ${S.rec.economy?.length ? `<tr><td colspan="3" class="muted">Giống web mẫu (dòng HERO, thiết kế riêng)</td></tr>` : ''}
         ${S.rec.ranked.slice(0, S.rec.economy?.length ? 4 : 6).map((x) => `<tr ${x.code === pkgCode ? 'style="font-weight:700"' : ''}><td>${esc(x.code)} <span class="muted">${esc(x.name)}</span></td><td class="n">${trieu(x.price_list)}</td><td>${x.code === pkgCode ? '✓' : `<button class="link" data-act="pickPkg" data-code="${esc(x.code)}">Chọn</button>`}</td></tr>`).join('')}
         ${S.rec.economy?.length ? `<tr><td colspan="3" class="muted" style="padding-top:8px">Tiết kiệm (dòng ZERO, giao diện mẫu dựng sẵn)</td></tr>` + S.rec.economy.slice(0, 4).map((x) => `<tr ${x.code === pkgCode ? 'style="font-weight:700"' : ''}><td>${esc(x.code)} <span class="muted">${esc(x.name)}</span></td><td class="n">${trieu(x.price_list)}</td><td>${x.code === pkgCode ? '✓' : `<button class="link" data-act="pickPkg" data-code="${esc(x.code)}" data-eco="1">Chọn</button>`}</td></tr>`).join('') : ''}
       </tbody></table>
-        ${p.pricing.package_code ? `<button class="link small" data-act="autoPkg">↺ Tự chọn gói rẻ nhất</button>` : ''}` : ''}
+        ${p.pricing.package_code ? `<button class="link small" data-act="autoPkg">↺ Tự chọn gói rẻ nhất</button>` : ''}</details>` : ''}
       ${questions.length ? `<h3>Nên hỏi khách</h3><ul class="small" style="margin:0 0 0 16px;padding:0">${questions.slice(0, 6).map((q) => `<li>${esc(q.text)}</li>`).join('')}</ul>` : ''}`}
     </div>
   </div></div>`;
@@ -416,27 +500,47 @@ function measureTableHtml(Q) {
   const row = (x) => `<tr><td><b>${esc(x.title)}</b><div class="small muted">${esc(x.how)}</div></td><td>${esc(x.value)}</td>
     <td><select data-measure="${x.key}" ${edit ? '' : 'disabled'} title="Chỉnh khi số đo chưa chuẩn (vd. sitemap không đọc được)">${(R[x.key]?.bands || []).map((b, i) => `<option value="${i}" ${i === x.band ? 'selected' : ''}>${esc(b.label)}${i === x.auto_band ? ' · số đo' : ''}</option>`).join('')}</select>${x.overridden ? ` ${chip('✎ sale chỉnh', 'warn')}` : ''}</td>
     <td class="n">${x.pts}</td></tr>`;
-  return `<details class="measure" open><summary><b>Đo lường web mẫu</b> — ${c.score}/${c.max} điểm → <b>M${c.level} · ${esc(c.name)}</b>${c.enterprise ? ' · Enterprise' : ''}</summary>
-    <div class="tablewrap"><table class="rubric"><thead><tr><th>Tiêu chí</th><th>Đo được trên web mẫu</th><th>Mức</th><th class="n">Điểm</th></tr></thead><tbody>${c.rows.map(row).join('')}</tbody></table></div>
+  return `<details class="measure"><summary style="padding:4px 0"><b>📐 Độ phức tạp giao diện: M${c.level} · ${esc(c.name)}</b> <span class="muted small">(${c.score}/${c.max} điểm · bấm xem chi tiết)</span>${c.enterprise ? ' · Enterprise' : ''}</summary>
+    <div class="tablewrap" style="margin-top:8px"><table class="rubric"><thead><tr><th>Tiêu chí</th><th>Đo được trên web mẫu</th><th>Mức</th><th class="n">Điểm</th></tr></thead><tbody>${c.rows.map(row).join('')}</tbody></table></div>
     <div class="row" style="margin-top:8px;gap:8px;align-items:center"><label class="small">Mức áp dụng
-      <select data-qlevel ${edit ? '' : 'disabled'} title="Nâng khi web mẫu đầu tư thiết kế hơn số đo (ảnh minh họa riêng, nhiều khối nội dung…); báo giá ghi rõ mức đo và mức sale chọn">${[1, 2, 3, 4, 5, 6, 7, 8].map((m) => `<option value="${m}" ${m === (Q.design_level || c.level) ? 'selected' : ''}>M${m} – ${LEVEL_NAME[m]}${m === c.level ? ' (theo đo lường)' : ''}</option>`).join('')}</select></label>
+      <select data-qlevel ${edit ? '' : 'disabled'} title="Nâng khi web mẫu đầu tư thiết kế hơn số đo">${[1, 2, 3, 4, 5, 6, 7, 8].map((m) => `<option value="${m}" ${m === (Q.design_level || c.level) ? 'selected' : ''}>M${m} – ${LEVEL_NAME[m]}${m === c.level ? ' (theo đo lường)' : ''}</option>`).join('')}</select></label>
       ${Q.design_level && Q.design_level !== c.level ? chip(`sale chọn M${Q.design_level}, đo được M${c.level}`, 'warn') : ''}</div>
-    <p class="small muted" style="margin:6px 0 0">Thang: ${esc(c.scale_text || '')}. Tính năng, số trang, số sản phẩm đã tính trong gói — <b>không cộng lại</b> vào điểm này. Bảng này in kèm báo giá gửi khách.</p></details>`;
+    <p class="small muted" style="margin:6px 0 0">Thang: ${esc(c.scale_text || '')}. Tính năng, số trang, số sản phẩm đã tính trong gói — không cộng lại vào điểm này.</p></details>`;
 }
-// Hai phương án cho khách chọn: làm giống web mẫu (theo mức đo) hoặc tiết kiệm (giao diện mẫu dựng sẵn, đủ tính năng)
-function optionsHtml(Q) {
+
+// Hai phương án cho khách chọn: Tiết kiệm (giao diện dựng sẵn ZERO) hoặc Theo web mẫu (may đo HERO)
+function pricingOptionsHtml(Q, P, r) {
   const O = Q?.options; const c = Q?.complexity;
   if (!O) return '';
   const edit = can('requirement.decide');
-  const card = (mode, title, sub, o) => `<button class="opt ${O.mode === mode ? 'on' : ''}" data-act="designMode" data-mode="${mode}" ${edit ? '' : 'disabled'}>
-    <span class="small">${O.mode === mode ? '● ' : '○ '}${title}</span><b>${money(o.price)}</b><span class="small muted">${esc(sub)}${o.package ? ' · ' + esc(o.package) : ''}</span></button>`;
-  const diff = O.match.price - O.economy.price;
-  return `<div class="opts">${card('match', 'Giống web mẫu', `giao diện M${O.level}`, O.match)}${card('economy', 'Tiết kiệm', 'giao diện mẫu dựng sẵn', O.economy)}</div>
-    <div class="small muted" style="margin-top:4px">${diff > 0 ? `Chênh ${money(diff)} là phần làm giao diện giống web mẫu (mức M${O.level}, xem bảng đo lường ở mục 1).` : 'Hai phương án cùng giá: web mẫu không đòi hỏi giao diện cao hơn gói theo tính năng.'}</div>
-    ${c?.enterprise && O.mode === 'match' ? `<p class="checks" style="margin:6px 0 0"><span class="warn">⚠️ Quy mô vượt gói HERO 8 — matbao.ws xếp loại <b>Enterprise, báo giá riêng</b>. Giá trên là mức tối thiểu.</span></p>` : ''}`;
+  const isEco = O.mode === 'economy';
+  return `
+    <div class="opt-cards">
+      <div class="opt-card ${isEco ? 'active' : ''}" data-act="designMode" data-mode="economy" ${edit ? '' : 'style="pointer-events:none"'}>
+        <div class="opt-top">
+          <span class="opt-badge eco">★ Tiết kiệm</span>
+          <span class="opt-radio">${isEco ? '●' : '○'}</span>
+        </div>
+        <div class="opt-title">Phương án Tiết kiệm</div>
+        <div class="opt-price">${vnd(O.economy.price)}</div>
+        <div class="opt-pkg">${esc(O.economy.package || 'Gói ZERO')} ${O.economy.package_name ? '– ' + esc(O.economy.package_name) : ''}</div>
+        <div class="opt-desc">Giao diện dựng sẵn chuẩn SEO, tối ưu tốc độ, phù hợp shop và doanh nghiệp vừa & nhỏ.</div>
+      </div>
+      <div class="opt-card ${!isEco ? 'active' : ''}" data-act="designMode" data-mode="match" ${edit ? '' : 'style="pointer-events:none"'}>
+        <div class="opt-top">
+          <span class="opt-badge hero">Thiết kế theo mẫu</span>
+          <span class="opt-radio">${!isEco ? '●' : '○'}</span>
+        </div>
+        <div class="opt-title">May đo giao diện riêng</div>
+        <div class="opt-price">${vnd(O.match.price)}</div>
+        <div class="opt-pkg">${esc(O.match.package || 'Gói HERO')} ${O.match.package_name ? '– ' + esc(O.match.package_name) : ''}</div>
+        <div class="opt-desc">May đo giao diện độc quyền (mức M${O.level}) theo nhận diện và bố cục của web mẫu.</div>
+      </div>
+    </div>
+    ${c?.enterprise && !isEco ? `<p class="checks" style="margin:8px 0 0"><span class="warn">⚠️ Quy mô vượt gói HERO 8 — matbao.ws xếp loại <b>Enterprise, báo giá riêng</b>. Giá trên là mức tối thiểu.</span></p>` : ''}`;
 }
 
-// ① Giá sơ bộ cho web giống web mẫu → ② Phát sinh theo tính năng chọn thêm → Tổng
+// ① Giá sơ bộ gói cơ sở đã chọn → ② Phát sinh theo tính năng/khối lượng chọn thêm → Tổng
 function priceStepsHtml(P, r, pkg, running) {
   const Q = S.quick;
   if (!Q?.baseline) {
@@ -446,28 +550,47 @@ function priceStepsHtml(P, r, pkg, running) {
       <div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>`;
   }
   const b = Q.baseline;
-  if (!b.count && !b.package) { // quét xong nhưng không nhận ra gì (web chặn máy quét / trang trống) → không bày giá gốc 0 ₫
+  if (!b.count && !b.package) { // quét xong nhưng không nhận ra gì
     const warn = `<div class="step"><div class="small muted">① Đánh giá sơ bộ web mẫu</div><p class="checks" style="margin:6px 0"><span class="warn">Không nhận ra tính năng nào trên ${esc(domainLabel(b.domain))} — web có thể chặn máy quét. Bấm <b>Quét lại</b> hoặc tick tính năng ở mục 2.</span></p></div>`;
     if (!P.requirements.some((x) => x.decision === 'include')) return warn;
     return `${warn}<div class="step total"><div class="small muted">Tổng báo giá${pkg ? ` · gói ${esc(pkg.code)}` : ''}</div><div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div></div>`;
   }
-  const ch = Q.changes || [];
+
+  const O = Q.options;
+  const isEco = O?.mode === 'economy';
+  const chosenBase = isEco ? O?.economy : (O?.match || b);
+  const basePrice = chosenBase?.price ?? b.price;
+  const basePkg = chosenBase?.package ?? b.package;
+
+  // Lọc bỏ thay đổi DESIGN_LEVEL vì đây là lựa chọn gói giữa Tiết kiệm và Theo web mẫu, không phải phát sinh thêm
+  const ch = (Q.changes || []).filter((c) => c.code !== 'DESIGN_LEVEL');
   const tierOf = (code) => { const t = S.meta.feature_tiers?.[code]; return t && !t.all ? ` <span class="muted">· cần ${esc(t.code)}</span>` : !t ? ' <span class="muted">· ngoài gói</span>' : ''; };
   const line = (c) => c.kind === 'added' ? `<li>+ ${esc(c.title)}${Number(c.to) > 1 ? ` (${num(c.to, 0)})` : ''}${tierOf(c.code)}</li>` : c.kind === 'removed' ? `<li>− Bỏ ${esc(c.title)}</li>` : `<li>${esc(c.title)}: ${num(c.from, 0)} → ${num(c.to, 0)}</li>`;
+
+  // Tính phát sinh so với gói cơ sở đã chọn
+  const extrasAmount = Math.max(0, Number(r.price_net) - basePrice);
+
   return `
-    <div class="step"><div class="small muted">① Web giống <b>${esc(domainLabel(b.domain))}</b> — đánh giá sơ bộ</div>
-      <div class="big2">${vnd(b.price)}</div>
-      <div class="small muted">Gói ${esc(b.package || '')}${b.package_name ? ' – ' + esc(b.package_name) : ''} · ${b.count} tính năng thấy trên web mẫu</div>
-      ${optionsHtml(Q)}</div>
-    <div class="step"><div class="small muted">② Phát sinh theo tính năng chọn thêm</div>
-      <div class="big2" style="color:${Q.extra > 0 ? 'var(--accent)' : 'inherit'}">${Q.extra >= 0 ? '+' : '−'} ${vnd(Math.abs(Q.extra))}</div>
-      ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : `<div class="small muted">Chưa chọn thêm tính năng — tick ở mục 2, mỗi mục ghi sẵn giá cộng thêm.${Q.package_choice ? ' Chênh lệch ở trên là do gói chọn tay.' : ''}</div>`}
-      ${Q.package_choice ? `<div class="small" style="margin-top:4px">${chip('Gói chọn tay', 'warn')} <b>${esc(Q.package_choice.manual)}</b> thay cho gói đề xuất ${esc(Q.package_choice.auto)} (${money(Q.package_choice.auto_price)}): ${Q.package_choice.diff >= 0 ? '+' : '−'}${money(Math.abs(Q.package_choice.diff))} <button class="link small" data-act="useAutoPkg">Dùng gói đề xuất</button></div>`
-        : Q.current.package && Q.current.package !== b.package ? `<div class="small">Gói chuyển: ${esc(b.package)} → <b>${esc(Q.current.package)}</b></div>` : ''}</div>
-    <div class="step total"><div class="small muted">Tổng báo giá${pkg ? ` · gói ${esc(pkg.code)}` : ''}</div>
-      <div class="big">${vnd(r.price_net)}</div><div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b>${vnd(r.total_incl_vat)}</b></div>
+    ${pricingOptionsHtml(Q, P, r)}
+    <div class="step" style="margin-top:12px">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="small muted">① Gói cơ sở (${esc(basePkg || '')})</span>
+        <span class="n"><b>${vnd(basePrice)}</b></span>
+      </div>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-top:4px">
+        <span class="small muted">② Phát sinh chọn thêm</span>
+        <span class="n" style="color:${extrasAmount > 0 ? 'var(--accent)' : 'inherit'}"><b>${extrasAmount > 0 ? '+ ' + vnd(extrasAmount) : '0 ₫'}</b></span>
+      </div>
+      ${ch.length ? `<ul class="small" style="margin:4px 0 0 16px;padding:0">${ch.map(line).join('')}</ul>` : `<div class="small muted" style="margin-top:2px">Chưa có tính năng phát sinh ngoài gói.</div>`}
+      ${Q.package_choice ? `<div class="small" style="margin-top:4px">${chip('Gói chọn tay', 'warn')} <b>${esc(Q.package_choice.manual)}</b> thay cho gói đề xuất ${esc(Q.package_choice.auto)}: ${money(Q.package_choice.diff)} <button class="link small" data-act="useAutoPkg">Dùng gói đề xuất</button></div>` : ''}
+    </div>
+    <div class="step total">
+      <div class="small muted">Tổng báo giá dự kiến${pkg ? ` · gói ${esc(pkg.code)}` : ''}</div>
+      <div class="big">${vnd(r.price_net)}</div>
+      <div class="small">Chưa VAT · Gồm VAT ${r.vat_pct}%: <b style="font-size:15px;color:var(--ink)">${vnd(r.total_incl_vat)}</b></div>
       ${priceMakeupHtml(r, pkg)}
-      ${ch.length && can('pricing.edit') ? `<button class="link small" data-act="setBaseline" title="Dùng khi khách chốt phạm vi mới làm mốc">↺ Lấy lựa chọn hiện tại làm giá gốc</button>` : ''}</div>`;
+      ${ch.length && can('pricing.edit') ? `<button class="link small" data-act="setBaseline" title="Dùng khi khách chốt phạm vi mới làm mốc">↺ Lấy lựa chọn hiện tại làm giá gốc</button>` : ''}
+    </div>`;
 }
 
 // Cấu thành giá: gói + dịch vụ cộng thêm + làm thêm ngoài gói (để thấy vì sao tổng khác giá niêm yết của gói)
@@ -906,6 +1029,41 @@ const ACT = {
   }),
   applyBrief: run(async () => { const r = await api(`/api/projects/${pid()}/brief-apply`, 'POST', { brief: document.getElementById('qBrief').value }); toast(r.found ? `Đã nhận ra ${r.found} tính năng từ mô tả` : 'Không nhận ra tính năng nào — hãy tick tay ở mục 2', !r.found); reload(); }),
   printQuick: (el) => { window.open(`/quote/project/${pid()}`, '_blank'); },
+  toggleFeatView: () => { S.featView = S.featView === 'tier' ? 'cat' : 'tier'; renderQuick(); },
+  copyQuote: run(async () => {
+    const P = S.project; const p = P.project; const r = P.preview;
+    const pkgCode = p.pricing.package_code || P.meta.auto_package || '';
+    const Q = S.quick;
+    const isEco = Q?.options?.mode === 'economy';
+    const opt = Q?.options;
+    const modeLabel = isEco ? 'Tiết kiệm (Giao diện dựng sẵn chuẩn SEO)' : `Thiết kế riêng theo web mẫu (mức M${opt?.level || 2})`;
+    const refUrl = P.refs[0]?.url || '';
+    const lines = [
+      `BÁO GIÁ THIẾT KẾ WEBSITE - MATBAO WS`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `• Dự án: ${p.name || ''}`,
+      p.customer_name ? `• Khách hàng: ${p.customer_name}` : null,
+      refUrl ? `• Web mẫu tham khảo: ${refUrl}` : null,
+      `• Phương án: ${modeLabel}`,
+      `• Gói đề xuất: ${pkgCode}${r.package_name ? ' – ' + r.package_name : ''}`,
+      `• Quy mô dự tính: ${p.pricing?.volumes?.templates || 6} mẫu trang · ${p.pricing?.volumes?.products || 0} sản phẩm · ${p.pricing?.volumes?.posts || 0} bài viết · hosting ${p.pricing?.volumes?.storage?.gb || 1} GB`,
+      `• Giá dịch vụ (chưa VAT): ${vnd(r.price_net)}`,
+      `• Tổng thanh toán (gồm VAT ${r.vat_pct || 10}%): ${vnd(r.total_incl_vat)}`,
+      (r.recurring || []).length ? `• Duy trì hằng năm: ${r.recurring.map((x) => `${vnd(x.amount)}/${x.period} (${x.title})`).join(', ')}` : null,
+      `• Thời hạn báo giá: 30 ngày`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `Liên hệ Mắt Bão WS để được tư vấn & triển khai chi tiết!`
+    ].filter(Boolean).join('\n');
+    try {
+      await navigator.clipboard.writeText(lines);
+      toast('Đã sao chép báo giá! Bạn có thể dán (Ctrl+V) gửi ngay cho khách qua Zalo.');
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = lines; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+      toast('Đã sao chép báo giá (gửi qua Zalo)!');
+    }
+  }),
   autoPkg: run(async () => { await savePricing({ package_code: null, package_price: null }); }),
   setBaseline: run(async () => { if (!confirm('Lấy các tính năng đang chọn làm giá gốc? Phần phát sinh sẽ tính lại từ 0.')) return; await api(`/api/projects/${pid()}/baseline`, 'POST', {}); toast('Đã đặt giá gốc mới'); reload(); }),
   saveProfile: run(async () => {
