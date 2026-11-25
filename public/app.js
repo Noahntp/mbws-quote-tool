@@ -385,7 +385,7 @@ function renderQuick() {
       ${running.length ? `<p class="checks"><span class="warn">⏳ Đang quét web mẫu — danh sách sẽ tự cập nhật.</span></p>` : ''}
       <div class="qty-grid">${QUICK_QTY.map(qty).join('')}</div>
       ${volumesHtml(S.quick?.volumes)}
-      ${cap ? `<div class="pkg-cap-hint"><span class="chip ok small">Sức chứa gói ${esc(pkgCode)}</span> ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '0')} SP · ${esc(cap.posts || '0')} bài viết · Hosting: ${esc(cap.hosting || 'theo dự án')}. <i>Vượt sức chứa sẽ tính phí lưu trữ/nhập liệu thêm hằng năm.</i></div>` : ''}
+      ${cap ? `<div class="pkg-cap-hint"><span class="chip ok small">Sức chứa gói ${esc(pkgCode)}</span> ~${cap.pages ?? '?'} mẫu trang (${esc(cap.sitemap || '')}) · ${esc(cap.products || '0 SP')} · ${esc(cap.posts || '0 bài viết')} · Hosting:${esc(cap.hosting || 'theo dự án')}. <i>Vượt sức chứa sẽ tính phí lưu trữ/nhập liệu thêm hằng năm.</i></div>` : ''}
       ${S.featView === 'tier' ? `<div class="tiers" style="margin-top:12px">${featureGroups().map(tierCard).join('')}</div>` : `<div class="feat-categories">${FEATURE_CATS.map(renderCat).join('')}</div>`}
     </div>
   </div>
