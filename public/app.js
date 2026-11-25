@@ -727,7 +727,10 @@ function tabSurvey(el) {
     <div class="tablewrap"><table><tbody>${pages.map((e) => {
       const feats = ev.filter((f) => f.kind === 'feature' && f.url === e.url);
       const m = mobiles[e.url];
-      return `<tr><td style="width:260px"><div class="thumbs"><a href="/storage/${esc(e.asset_path)}" target="_blank"><img src="/storage/${esc(e.asset_path)}" alt="desktop" style="width:180px"></a>${m ? `<a href="/storage/${esc(m.asset_path)}" target="_blank"><img class="m" src="/storage/${esc(m.asset_path)}" alt="mobile"></a>` : ''}</div></td>
+      // ảnh chụp đã dọn (nút "Dọn ảnh" / quét lại) → asset_path rỗng: ghi chú thay vì hiện ảnh vỡ
+      const shot = (x, cls, alt) => (x?.asset_path ? `<a href="/storage/${esc(x.asset_path)}" target="_blank"><img ${cls} src="/storage/${esc(x.asset_path)}" alt="${alt}"${cls ? '' : ' style="width:180px"'}></a>` : '');
+      const shots = shot(e, '', 'desktop') + shot(m, 'class="m"', 'mobile');
+      return `<tr><td style="width:260px"><div class="thumbs">${shots || '<span class="small muted">Ảnh chụp đã được dọn để tiết kiệm dung lượng — bấm "Quét lại" để chụp lại.</span>'}</div></td>
       <td><b>${esc(e.code)}</b> <a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.url)}</a><div class="small muted">${esc(e.detail)} · ${esc(e.captured_at)} · hash ${esc((e.asset_hash || '').slice(0, 12))}</div>
       <div style="margin-top:6px">${feats.map((f) => `<span title="${esc(f.code + ': ' + f.detail)}">${chip(f.feature + (f.verification !== 'observed' ? ' (suy luận)' : ''), f.verification === 'observed' ? 'ok' : 'warn')}</span>`).join(' ')}</div></td></tr>`;
     }).join('')}
