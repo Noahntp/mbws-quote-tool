@@ -1,7 +1,7 @@
 // Nhận dạng loại trang khi "Đếm chính xác" (đọc HTML, không mở trình duyệt) — hàm thuần, không cần mạng.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeHtml, deepSummary, initDeepState } from '../server/crawler/deep.js';
+import { analyzeHtml, deepSummary, initDeepState, deepStep } from '../server/crawler/deep.js';
 
 const page = (body, head = '') => `<!doctype html><html><head>${head}</head>${body}</html>`;
 
@@ -50,4 +50,61 @@ test('tổng kết: ảnh hỏng không tính, ảnh chưa đọc được kích
   assert.equal(r.image_bytes, 4000); // 3 ảnh đo được 3000 byte + 1 ảnh chưa đọc ≈ 1000
   assert.equal(r.products, 2); assert.equal(r.posts, 1); assert.equal(r.js_only, false);
   assert.equal(deepSummary({ ...initDeepState('https://x.vn/'), pages: 1, home_links: 0, phase: 'done' }).js_only, true);
+});
+
+test('web giới hạn tốc độ: bỏ nhiều trang sau khi thử lại → đánh dấu đếm chưa đủ; vài trang 404 lẻ tẻ thì không', () => {
+  const base = { ...initDeepState('https://w.vn/'), origin: 'https://w.vn', products: ['a'], posts: ['b'], phase: 'done' };
+  assert.equal(deepSummary({ ...base, pages: 26, rate_limited: 40, limited_failed: 12 }).incomplete, true);
+  assert.equal(deepSummary({ ...base, pages: 800, errors: 3 }).incomplete, false);
+  assert.equal(deepSummary({ ...base, pages: 100, errors: 40 }).incomplete, true);
+});
+
+// web giả: trang chủ liên kết tới 30 bài viết; giới hạn tốc độ theo kịch bản truyền vào
+function fakeSite(refuse) {
+  const hits = {};
+  const page = (body) => ({ status: 200, type: 'text/html', text: `<html><body>${body}</body></html>`, bytes: 100 });
+  const fetchText = async (url) => {
+    const u = new URL(url); hits[u.pathname] = (hits[u.pathname] || 0) + 1;
+    if (u.pathname === '/robots.txt' || /sitemap/.test(u.pathname)) return { status: 404, url, text: '' };
+    if (u.pathname === '/') return { ...page(Array.from({ length: 30 }, (_, i) => `<a href="/bai-${i}.html">Bài ${i}</a>`).join('')), url };
+    if (refuse(u.pathname, hits[u.pathname])) return { status: 429, url, text: '', retry_after: null };
+    return { ...page(`<h1>Bài</h1><span>Ngày đăng: 01/02/2025</span><img src="/up${u.pathname}.jpg">`), url };
+  };
+  return { fetchText, headSize: async () => 1000, checkUrl: async () => {}, hits };
+}
+const fastLimits = { maxPages: 5000, maxImages: 10000, maxTotalMs: 60000, perPathVariants: 400, throttleMs: 5 };
+
+test('web giới hạn tốc độ: giãn nhịp và thử lại trang bị từ chối → vẫn đếm đủ 30 bài', async () => {
+  const site = fakeSite((path, n) => path.startsWith('/bai-') && n === 1); // mỗi bài từ chối lần đầu
+  const S = initDeepState('https://w.test/');
+  while (S.phase !== 'done') await deepStep(S, { ...site, limits: fastLimits, budgetMs: 30000 });
+  const r = deepSummary(S);
+  assert.equal(r.posts, 30);
+  assert.ok(r.rate_limited >= 30, 'phải ghi nhận các lần bị từ chối');
+  assert.equal(r.limited_failed, 0);
+  assert.equal(r.incomplete, false);
+  assert.ok(S.delay_ms > 0, 'phải giãn nhịp sau khi bị từ chối');
+});
+
+test('web từ chối mãi một số trang: bỏ sau 8 lần thử lại, kết quả đánh dấu chưa đủ', async () => {
+  const site = fakeSite((path) => /^\/bai-(1|2|3|4|5)\.html$/.test(path)); // 5 bài luôn bị từ chối
+  const S = initDeepState('https://w.test/');
+  while (S.phase !== 'done') await deepStep(S, { ...site, limits: fastLimits, budgetMs: 30000 });
+  const r = deepSummary(S);
+  assert.equal(r.posts, 25);
+  assert.equal(r.limited_failed, 5);
+  assert.equal(site.hits['/bai-1.html'], 9); // 1 lần đầu + 8 lần thử lại
+  assert.equal(r.incomplete, true);
+});
+
+test('web giới hạn theo tốc độ thật (1 yêu cầu / 20 ms): tự tìm nhịp phù hợp, đếm đủ, không chậm vô hạn', async () => {
+  let last = 0;
+  const site = fakeSite(() => { const now = Date.now(); if (now - last < 20) return true; last = now; return false; });
+  const S = initDeepState('https://w.test/');
+  const t0 = Date.now();
+  while (S.phase !== 'done') await deepStep(S, { ...site, concurrency: 4, limits: { ...fastLimits, throttleMs: 30 }, budgetMs: 30000 });
+  const r = deepSummary(S);
+  assert.equal(r.posts, 30);
+  assert.equal(r.incomplete, false);
+  assert.ok(Date.now() - t0 < 10000, `đếm quá chậm: ${Date.now() - t0} ms`);
 });

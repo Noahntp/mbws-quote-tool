@@ -111,7 +111,7 @@ export async function safeFetchText(url, { timeoutMs = 10000, maxBytes = 2_000_0
           chunks.push(value);
         }
       }
-      return { status: res.status, url: current, text: Buffer.concat(chunks).toString('utf8'), type, bytes: size };
+      return { status: res.status, url: current, text: Buffer.concat(chunks).toString('utf8'), type, bytes: size, retry_after: res.headers.get('retry-after') };
     } finally { clearTimeout(t); }
   }
   throw new Error('Quá nhiều chuyển hướng');

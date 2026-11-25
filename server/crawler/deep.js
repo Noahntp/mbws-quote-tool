@@ -8,7 +8,7 @@ import { safeFetchText, safeHeadSize, assertPublicUrl } from './ssrf.js';
 import { normalizeUrl, isHtmlCandidate, parseRobots, robotsAllows, classify } from './urls.js';
 
 const UA = 'MBWS-QuoteBot';
-export const DEEP_LIMITS = { maxPages: 5000, maxImages: 10000, maxTotalMs: 45 * 60 * 1000, perPathVariants: 400 };
+export const DEEP_LIMITS = { maxPages: 5000, maxImages: 10000, maxTotalMs: 45 * 60 * 1000, perPathVariants: 400, throttleMs: 1500 };
 
 const decode = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&#0?38;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'");
 // tham số chỉ sắp xếp / lọc / thao tác → cùng nội dung với trang gốc (bỏ đi trước khi so trùng)
@@ -114,39 +114,42 @@ const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); 
 export function initDeepState(startUrl) {
   return { v: 1, input: startUrl, phase: 'init', start: null, origin: null, robots: null, sm_queue: [], sm_idx: 0, sm_urls: 0,
     seen: [], queue: [], variants: {}, products: [], posts: [], images: [], img_extra: 0, via: {},
-    pages: 0, html_bytes: 0, errors: 0, robots_blocked: 0, img_idx: 0, img_bytes: 0, img_sized: 0, elapsed_ms: 0, truncated: false, home_links: null };
+    pages: 0, html_bytes: 0, errors: 0, robots_blocked: 0, img_idx: 0, img_bytes: 0, img_sized: 0, elapsed_ms: 0, truncated: false, home_links: null,
+    delay_ms: 0, retries: {}, rate_limited: 0, limited_failed: 0 };
 }
 
 /**
  * Chạy một chặng (tối đa budgetMs) rồi trả về trạng thái mới. state.phase === 'done' là xong.
  * Lỗi không mở được trang chủ → ném lỗi (err.blocked = true nếu web từ chối máy quét).
  */
-export async function deepStep(state, { budgetMs = 180000, concurrency = 4, imgConcurrency = 8, limits = DEEP_LIMITS, log = () => {}, onProgress = () => {}, onPage = null } = {}) {
+export async function deepStep(state, { budgetMs = 180000, concurrency = 4, imgConcurrency = 8, limits = DEEP_LIMITS, log = () => {}, onProgress = () => {}, onPage = null,
+  fetchText = safeFetchText, headSize = safeHeadSize, checkUrl = assertPublicUrl } = {}) { // 3 hàm cuối: thay được khi kiểm thử
   const t0 = Date.now();
   // phần lớn tổng thời gian cho việc đọc trang, chừa ~20% để đo dung lượng ảnh
   const timeLeft = (share = 1) => Math.min(budgetMs - (Date.now() - t0), limits.maxTotalMs * share - state.elapsed_ms - (Date.now() - t0));
   const S = state;
+  S.retries ||= {}; S.delay_ms ||= 0; S.bad_delay ||= 0; S.ok_streak ||= 0; S.rate_limited ||= 0; S.limited_failed ||= 0; // trạng thái lưu từ bản cũ
   const seen = new Set(S.seen); const products = new Set(S.products); const posts = new Set(S.posts); const images = new Set(S.images);
   const progress = () => onProgress({ phase: S.phase, pages: S.pages, queued: S.queue.length, products: products.size, posts: posts.size, images: images.size + S.img_extra, img_done: S.img_idx });
   try {
     if (S.phase === 'init') {
       let start = normalizeUrl(S.input);
-      await assertPublicUrl(start);
+      await checkUrl(start);
       let home;
-      try { home = await safeFetchText(start, { userAgent: UA, maxBytes: 3_000_000, timeoutMs: 20000 }); } catch (e) {
+      try { home = await fetchText(start, { userAgent: UA, maxBytes: 3_000_000, timeoutMs: 20000 }); } catch (e) {
         const code = String(e?.cause?.code || e?.code || e?.message || '');
         if (!/CERT|SSL|TLS/i.test(code)) throw Object.assign(new Error(`Không tải được trang chủ: ${e.message}`), { blocked: /ECONNRESET|ETIMEDOUT|abort/i.test(code) });
         // chứng chỉ SSL chỉ cấp cho dạng có / không có www → thử dạng còn lại
         const alt = new URL(start); alt.hostname = alt.hostname.startsWith('www.') ? alt.hostname.slice(4) : 'www.' + alt.hostname;
         start = alt.toString();
-        home = await safeFetchText(start, { userAgent: UA, maxBytes: 3_000_000, timeoutMs: 20000 }).catch((e2) => { throw new Error(`Chứng chỉ SSL của web mẫu bị lỗi (${code.match(/[A-Z_]{6,}/)?.[0] || 'SSL'}) — không đọc được trang: ${e2.message}`); });
+        home = await fetchText(start, { userAgent: UA, maxBytes: 3_000_000, timeoutMs: 20000 }).catch((e2) => { throw new Error(`Chứng chỉ SSL của web mẫu bị lỗi (${code.match(/[A-Z_]{6,}/)?.[0] || 'SSL'}) — không đọc được trang: ${e2.message}`); });
       }
       if ([401, 403, 429, 503].includes(home.status)) throw Object.assign(new Error(`Web mẫu từ chối máy quét (HTTP ${home.status})`), { blocked: true });
       if (home.status >= 400) throw new Error(`Trang chủ trả lỗi HTTP ${home.status}`);
       const fin = new URL(home.url); // theo chuyển hướng (http → https, có / không www)
       if (hostOf(fin.href) !== hostOf(start)) throw new Error(`Trang chủ chuyển sang tên miền khác (${fin.hostname}) — nhập địa chỉ đó để đếm`);
       S.start = start; S.origin = fin.origin;
-      try { const r = await safeFetchText(`${S.origin}/robots.txt`, { userAgent: UA, timeoutMs: 10000 }); if (r.status === 200 && !/<html/i.test(r.text)) S.robots = parseRobots(r.text, UA); } catch { /* không có robots.txt */ }
+      try { const r = await fetchText(`${S.origin}/robots.txt`, { userAgent: UA, timeoutMs: 10000 }); if (r.status === 200 && !/<html/i.test(r.text)) S.robots = parseRobots(r.text, UA); } catch { /* không có robots.txt */ }
       const smAbs = (x) => { try { return new URL(x, S.origin + '/').toString(); } catch { return null; } }; // "Sitemap: /sitemap.xml" (tương đối)
       S.sm_queue = (S.robots?.sitemaps || []).map(smAbs).filter(Boolean);
       if (!S.sm_queue.length) S.sm_queue = [`${S.origin}/sitemap.xml`, `${S.origin}/sitemap_index.xml`, `${S.origin}/wp-sitemap.xml`];
@@ -175,6 +178,39 @@ export async function deepStep(state, { budgetMs = 180000, concurrency = 4, imgC
       S.queue.push(p.url);
     };
     const idOf = (url, canonical) => { const c = canonical && hostOf(canonical) === host ? prep(canonical) : null; return (c || prep(url))?.key || url; };
+    // Web giới hạn tốc độ (HTTP 429 / 503): giãn nhịp MỌI yêu cầu (theo Retry-After nếu có), xếp trang vào hàng thử lại sau.
+    // Không làm vậy thì trang bị từ chối bị bỏ qua và số đếm thiếu mà không ai biết.
+    const base = limits.throttleMs ?? 1500;
+    let nextAt = 0; let lastRaise = 0;
+    const pace = async () => {
+      if (!S.delay_ms) return;
+      const wait = Math.max(0, nextAt - Date.now());
+      nextAt = Math.max(Date.now(), nextAt) + S.delay_ms;
+      if (wait) await new Promise((r) => setTimeout(r, wait));
+    };
+    const throttled = (url, retryAfter) => {
+      S.rate_limited++;
+      const ra = Number(retryAfter) > 0 ? Number(retryAfter) * 1000 : 0;
+      S.ok_streak = 0;
+      // nhiều yêu cầu đang chạy cùng bị từ chối = MỘT đợt → chỉ tăng nhịp chờ một lần mỗi đợt (không nhân đôi liên tục tới 30 giây);
+      // nhớ nhịp vừa bị từ chối để về sau không nới xuống dưới mức đó
+      if (Date.now() - lastRaise > Math.max(S.delay_ms, 1000)) {
+        S.bad_delay = Math.max(S.bad_delay, S.delay_ms);
+        S.delay_ms = Math.min(30000, Math.max(ra, S.delay_ms ? S.delay_ms * 2 : base));
+        lastRaise = Date.now();
+      }
+      nextAt = Math.max(nextAt, Date.now() + Math.max(ra, S.delay_ms));
+      // bị từ chối do tốc độ chung, không phải lỗi của riêng trang này → cho thử lại nhiều lần
+      const n = (S.retries[url] || 0) + 1; S.retries[url] = n;
+      if (n <= 8) S.queue.push(url); else S.limited_failed++;
+      log('web giới hạn tốc độ (HTTP 429/503) — giãn nhịp', S.delay_ms, 'ms');
+    };
+    // tải được trang → nới chậm (10% sau mỗi 10 trang liền thành công), không thấp hơn nhịp từng bị từ chối, không dưới 1/3 mức cơ sở
+    const eased = () => {
+      if (!S.delay_ms || ++S.ok_streak < 10) return;
+      S.ok_streak = 0;
+      S.delay_ms = Math.max(Math.round(base / 3), Math.round(S.bad_delay * 1.2), Math.round(S.delay_ms * 0.9));
+    };
 
     if (S.phase === 'sitemap') {
       if (!seen.size) push(S.start);
@@ -184,7 +220,7 @@ export async function deepStep(state, { budgetMs = 180000, concurrency = 4, imgC
         const raw = S.sm_queue[S.sm_idx];
         if (hostOf(raw) !== host) continue;
         const sm = new URL(raw); sm.protocol = origin.protocol; sm.hostname = origin.hostname;
-        const r = await safeFetchText(sm.toString(), { userAgent: UA, maxBytes: 15_000_000, timeoutMs: 20000 }).catch(() => null);
+        const r = await fetchText(sm.toString(), { userAgent: UA, maxBytes: 15_000_000, timeoutMs: 20000 }).catch(() => null);
         if (!r || r.status !== 200 || !/<(urlset|sitemapindex)/i.test(r.text)) continue;
         const locs = [...r.text.matchAll(/<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]]+?)\s*(?:\]\]>)?\s*<\/loc>/gi)].map((m) => decode(m[1].trim()));
         if (/<sitemapindex/i.test(r.text)) { for (const l of locs) if (!S.sm_queue.includes(l)) S.sm_queue.push(l); } else { S.sm_urls += locs.length; locs.forEach(push); }
@@ -203,12 +239,14 @@ export async function deepStep(state, { budgetMs = 180000, concurrency = 4, imgC
           if (stop) return;
           if (!S.queue.length) { if (!active) return; await new Promise((r) => setTimeout(r, 50)); continue; } // trang khác đang tải có thể thêm liên kết mới
           const url = S.queue.shift(); active++;
-          try { await visit(url); } finally { active--; }
+          try { await pace(); await visit(url); } finally { active--; }
         }
       };
       const visit = async (url) => {
         let r;
-        try { r = await safeFetchText(url, { userAgent: UA, maxBytes: 3_000_000, timeoutMs: 15000, htmlOnly: true }); } catch { S.errors++; return; }
+        try { r = await fetchText(url, { userAgent: UA, maxBytes: 3_000_000, timeoutMs: 15000, htmlOnly: true }); } catch { S.errors++; return; }
+        if (r.status === 429 || r.status === 503) { throttled(url, r.retry_after); return; }
+        eased();
         if (r.status !== 200) { if (r.status >= 400) S.errors++; return; }
         if (!r.text || (r.type && !/html/i.test(r.type))) return;
         if (hostOf(r.url) !== host) return; // chuyển hướng ra ngoài
@@ -243,7 +281,8 @@ export async function deepStep(state, { budgetMs = 180000, concurrency = 4, imgC
       const worker = async () => {
         while (S.img_idx < list.length && timeLeft() > 10000) {
           const u = list[S.img_idx++];
-          const n = await safeHeadSize(u, { userAgent: UA }).catch(() => null);
+          await pace();
+          const n = await headSize(u, { userAgent: UA }).catch(() => null);
           if (n > 0) { S.img_bytes += n; S.img_sized++; } else if (n === 0) S.img_missing = (S.img_missing || 0) + 1;
           if (Date.now() - lastBeat > 3000) { lastBeat = Date.now(); progress(); }
         }
@@ -271,6 +310,9 @@ export function deepSummary(S) {
     url: S.origin ? S.origin + '/' : S.input, pages: S.pages, products: S.products.length, posts: S.posts.length,
     images: imgCount, images_sized: S.img_sized, images_missing: missing, image_bytes: imageBytes, html_bytes: S.html_bytes,
     sitemap_urls: S.sm_urls, robots_blocked: S.robots_blocked, errors: S.errors, via: S.via,
+    rate_limited: S.rate_limited || 0, limited_failed: S.limited_failed || 0,
+    // thiếu nhiều trang (web giới hạn tốc độ / lỗi) → số đếm có thể THIẾU, không tự điền vào báo giá
+    incomplete: (S.limited_failed || 0) >= Math.max(3, S.pages * 0.05) || (S.errors || 0) > Math.max(10, S.pages * 0.2),
     truncated: !!S.truncated, js_only: S.pages <= 2 && (S.home_links ?? 0) < 5 && !S.sm_urls, minutes: Math.round(S.elapsed_ms / 6000) / 10,
   };
 }

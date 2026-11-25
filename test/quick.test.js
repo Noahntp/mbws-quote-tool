@@ -362,6 +362,14 @@ test('đếm chính xác: số đếm đủ thay số ước lượng (giữ ô 
   assert.equal((await api(`/api/deep-scans/${d.json.id}/apply`, 'POST', {})).status, 200);
   assert.equal((await q('DATA_POSTS')).quantity, 578);
 
+  // web giới hạn tốc độ → đếm chưa đủ: không tự điền, nhưng sale bấm "Dùng số này" thì vẫn điền
+  await run("UPDATE deep_scans SET result_json=? WHERE id=?", JSON.stringify({ url: 'https://demcx-test.vn/', pages: 26, products: 3, posts: 10, images: 50, image_bytes: 1e6, incomplete: true, rate_limited: 40, limited_failed: 12 }), d.json.id);
+  assert.equal((await applyDeepResult(d.json.id)).applied, false);
+  assert.equal((await q('DATA_PRODUCTS')).quantity, 84);
+  assert.equal((await api(`/api/deep-scans/${d.json.id}/apply`, 'POST', {})).status, 200);
+  assert.equal((await q('DATA_PRODUCTS')).quantity, 3);
+  await run("UPDATE requirements SET quantity=84 WHERE project_id=? AND feature='DATA_PRODUCTS'", id);
+
   // web chỉ chạy JavaScript (HTML rỗng): không điền số 0 vào báo giá
   await run("UPDATE deep_scans SET result_json=? WHERE id=?", JSON.stringify({ url: 'https://demcx-test.vn/', pages: 1, products: 0, posts: 0, images: 0, image_bytes: 0, js_only: true }), d.json.id);
   assert.equal((await api(`/api/deep-scans/${d.json.id}/apply`, 'POST', {})).status, 400);

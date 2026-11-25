@@ -459,8 +459,9 @@ function deepHtml(P) {
     const reqQ = (f) => Number(P.requirements.find((x) => x.feature === f && x.decision === 'include')?.quantity ?? NaN);
     const differs = (r.products > 0 && reqQ('DATA_PRODUCTS') !== r.products) || (r.posts > 0 && reqQ('DATA_POSTS') !== r.posts) || (st && reqQ('HOSTING_STORAGE') !== st.gb);
     const via = Object.entries(r.via || {}).map(([k, n]) => `${DEEP_VIA[k] || k}: ${n}`).join(', ');
-    body = `<span title="Nhận trang sản phẩm / bài viết theo ${esc(via)}">${chip('đã đếm đủ', 'ok')}</span> ${num(r.pages, 0)} trang · <b>${num(r.products, 0)}</b> sản phẩm/dịch vụ · <b>${num(r.posts, 0)}</b> bài viết · ${num(r.images, 0)} ảnh (${mb(r.image_bytes)})${st ? ` → hosting <b>${num(st.gb, 1)} GB</b>` : ''} <span class="muted">(${esc(fmtUtc(d.finished_at))}${r.truncated ? ' · web quá lớn, đã dừng ở giới hạn — số tối thiểu' : ''})</span>
+    body = `<span title="Nhận trang sản phẩm / bài viết theo ${esc(via)}">${r.incomplete ? chip('đếm chưa đủ', 'warn') : chip('đã đếm đủ', 'ok')}</span> ${num(r.pages, 0)} trang · <b>${num(r.products, 0)}</b> sản phẩm/dịch vụ · <b>${num(r.posts, 0)}</b> bài viết · ${num(r.images, 0)} ảnh (${mb(r.image_bytes)})${st ? ` → hosting <b>${num(st.gb, 1)} GB</b>` : ''} <span class="muted">(${esc(fmtUtc(d.finished_at))}${r.truncated ? ' · web quá lớn, đã dừng ở giới hạn — số tối thiểu' : ''})</span>
       ${r.js_only ? `<div class="checks"><span class="warn">Web dựng bằng JavaScript — đọc HTML không thấy nội dung, giữ số ước lượng của lượt quét.</span></div>` : ''}
+      ${r.incomplete && !r.js_only ? `<div class="checks"><span class="warn">Web mẫu ${r.rate_limited ? `giới hạn tốc độ (từ chối ${num(r.rate_limited, 0)} lần, bỏ ${num(r.limited_failed || 0, 0)} trang)` : `lỗi ${num(r.errors, 0)} trang`} — số có thể THIẾU nên chưa tự điền. Bấm "Đếm lại" sau ít phút.</span></div>` : ''}
       ${differs && !r.js_only && can('requirement.edit') ? `<button class="link small" data-act="deepApply" data-id="${d.id}">Dùng số này</button>` : ''} ${btn('Đếm lại')}`;
   }
   return `<div class="small" style="margin-top:6px">${body}</div>`;

@@ -110,6 +110,7 @@ export async function applyDeepResult(deepId, { force = false, userId = null } =
   const r = JSON.parse(d?.result_json || 'null');
   if (!d || d.status !== 'done' || !r) return { applied: false, reason: 'Chưa đếm xong' };
   if (r.js_only || r.pages < 3) return { applied: false, reason: 'Web mẫu dựng bằng JavaScript (HTML gần như rỗng) — không đếm được bằng cách đọc trang, giữ số ước lượng' };
+  if (r.incomplete && !force) return { applied: false, reason: 'Web mẫu giới hạn tốc độ hoặc nhiều trang lỗi — số đếm có thể thiếu, chưa tự điền. Đếm lại sau ít phút, hoặc bấm "Dùng số này" nếu vẫn muốn điền.' };
   const catalog = loadJson('data/catalog.json');
   const storage = storageFromExact(r);
   const day = new Date().toLocaleDateString('vi-VN');
